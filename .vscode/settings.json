@@ -1,6 +1,6 @@
 {
-    "workbench.colorTheme": "Light Modern",
+    "workbench.colorTheme": "Solarized Dark",
     "workbench.preferredDarkColorTheme": "Solarized Dark",
-    "workbench.preferredLightColorTheme": "Light Modern",
-    "workbench.preferredHighContrastLightColorTheme": "Light Modern"
+    "workbench.preferredLightColorTheme": "Solarized Dark",
+    "workbench.preferredHighContrastLightColorTheme": "Solarized Dark"
 }
