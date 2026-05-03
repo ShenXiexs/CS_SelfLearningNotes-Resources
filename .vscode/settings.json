@@ -3,5 +3,6 @@
     "workbench.preferredDarkColorTheme": "Cobalt2",
     "workbench.preferredLightColorTheme": "Cobalt2",
     "workbench.preferredHighContrastLightColorTheme": "Radical",
-    "workbench.preferredHighContrastColorTheme": "Radical"
+    "workbench.preferredHighContrastColorTheme": "Radical",
+    "editor.fontSize": 20
 }
