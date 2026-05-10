@@ -69,7 +69,6 @@ def why_this_course_exists():
     text("- 2016: researchers implemented and trained their own models.")
     text("- 2018: researchers downloaded models (e.g., BERT) and fine-tuned them.")
     text("- Today: researchers prompt API models (e.g., GPT/Claude/Gemini).")
-
     text("Moving up levels of abstraction boosts productivity, but")
     text("- These abstractions are leaky (in contrast to programming languages or operating systems).")
     text("- There is still fundamental research to be done that requires tearing up the stack.")

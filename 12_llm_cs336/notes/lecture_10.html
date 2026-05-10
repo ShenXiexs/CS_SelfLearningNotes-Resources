@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecture 10</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #18202a; }
+    main { max-width: 920px; margin: 0 auto; padding: 44px 28px 72px; background: white; min-height: 100vh; }
+    h1, h2, h3 { line-height: 1.18; margin: 1.45em 0 0.45em; }
+    h1 { font-size: 2.1rem; }
+    h2 { font-size: 1.55rem; border-top: 1px solid #e6e8ec; padding-top: 1.1em; }
+    h3 { font-size: 1.22rem; }
+    p, li, blockquote { font-size: 1.02rem; line-height: 1.58; }
+    p { margin: 0.55em 0; }
+    ul, ol { margin: 0.35em 0 0.35em 1.35em; padding: 0; }
+    blockquote { margin: 1em 0; padding: 0.7em 1em; border-left: 4px solid #c8d1dc; background: #f7f9fb; }
+    a { color: #2457d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .ref { margin-left: 0.2em; white-space: nowrap; }
+    figure { margin: 1.1em 0; text-align: center; }
+    img, video { max-width: 100%; height: auto; border: 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef1f5; padding: 0.08em 0.28em; border-radius: 4px; }
+    @media print {
+      body { background: white; }
+      main { padding: 0; max-width: none; }
+      a { color: #18202a; }
+      h2 { break-after: avoid; }
+      figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<h2>Lecture 10: inference</h2>
+<figure><img src="images/inference-schema.png" style="width: 600px"></figure>
+<h3>Understanding the inference workload</h3>
+<p>Inference shows up in many places:</p>
+<ul><li>Actual use (chatbots, code completion, agents, batch data processing)</li></ul>
+<ul><li>Model evaluation (e.g., on instruction following)</li></ul>
+<ul><li>Reinforcement learning (sample many generations, then apply score)</li></ul>
+<p>Why <strong>efficiency</strong> matters: training is one-time cost, inference is repeated many times</p>
+<ul><li>OpenAI processes ~8.6T tokens per day</li></ul>
+<a class="ref" href="https://www.pymnts.com/artificial-intelligence-2/2025/openai-bests-google-in-race-for-consumer-ai-token-consumption/" title="article">[article]</a>
+<ul><li>For reference, DeepSeek v4 was trained on 32T tokens</li></ul>
+<a class="ref" href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf" title="DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence">[DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence]</a>
+<p>Moreover:</p>
+<ul><li>Chatbots: most tokens are meant for human consumption (humans are bottleneck)</li></ul>
+<ul><li>Agents: query → internal trace → output for human (number of tokens generated can grow unbounded)</li></ul>
+<ul><li>Tokens generated = compute spent</li></ul>
+<p>Companies doing inference (a big deal for anyone who has a product or platform):</p>
+<ul><li>Providers serving closed models (OpenAI, Anthropic, Google, etc.)</li></ul>
+<ul><li>Providers serving open-weight models (Together, Fireworks, Baseten, DeepInfra, Groq, Cerebras, etc.)</li></ul>
+<p>Open-source packages:</p>
+<ul><li>vLLM: from Berkeley, pioneered PagedAttention, popular and good default</li></ul>
+<a class="ref" href="https://github.com/vllm-project/vllm" title="GitHub">[GitHub]</a>
+<ul><li>SGLang: from Berkeley, pioneered RadixAttention, good for agentic workloads</li></ul>
+<a class="ref" href="https://sgl-project.github.io/" title="project">[project]</a>
+<ul><li>TensorRT-LLM: from NVIDIA, highly optimized for GPUs</li></ul>
+<a class="ref" href="https://nvidia.github.io/TensorRT-LLM/overview.html" title="article">[article]</a>
+<ul><li>llama.cpp: C++ only, supports CPU inference, runs locally</li></ul>
+<a class="ref" href="https://github.com/ggml-org/llama.cpp" title="GitHub">[GitHub]</a>
+<p>Inference is huge. Important to make it fast.</p>
+<p>What does "fast" mean (metrics)?</p>
+<ul><li>Time-to-first-token (TTFT): how long user waits before any generation happens (for interactive applications)</li></ul>
+<ul><li>Latency (seconds/token): how fast tokens appear for <em>one</em> query (for interactive applications)</li></ul>
+<ul><li>Throughput (tokens/second): how fast tokens appear for <em>many</em> queries (for batch processing)</li></ul>
+<p>What governs efficiency?</p>
+<ul><li>Training (supervised): you see all tokens, can parallelize over sequence (matmul in Transformer)</li></ul>
+<ul><li>Inference: you have to generate sequentially, can't parallelize over generation, so harder to fully utilize compute</li></ul>
+<a class="ref" href="https://jax-ml.github.io/scaling-book/transformers/" title="Scaling book chapter on Transformers">[Scaling book chapter on Transformers]</a>
+<p>Notation (similar to einops):</p>
+<ul><li>Symbols denote dimensions (and their length): B (batch), T (sequence), D (model dim), H (head dim)</li></ul>
+<ul><li>Example: BT<font color="red">D</font> x <font color="red">D</font>H → BTH</li></ul>
+<ul><li><font color="red">Contracting (red)</font> dimensions appear in both operands and disappear from result</li></ul>
+<ul><li>Regular (black) dimensions appear in one operand and stay in result</li></ul>
+<ul><li>Example: <font color="blue">B</font><font color="red">D</font> x <font color="blue">B</font><font color="red">D</font> → B</li></ul>
+<ul><li><font color="blue">Batching (blue)</font> dimensions appear in both operands and stay in result</li></ul>
+<figure><img src="var/files/image-2a272a1a4f8f6ddbe5aaa45fcb38ed57-https_jax-ml_github_io_scaling-book_assets_img_transformer-diagram_png" style="width: 800px"></figure>
+<p>Conventions:</p>
+<ul><li>F = 4 D (MLP up-projects into 4x the model dimension)</li></ul>
+<ul><li>D = N H (model dimension split across N heads)</li></ul>
+<ul><li>N = K G (for GQA, number of heads split across K groups)</li></ul>
+<ul><li>S = T (during training, condition on S input tokens to predict T output tokens)</li></ul>
+<p>Setup: multiply X <font color="gray">(B x D)</font> and W <font color="gray">(D x F)</font> matrix</p>
+<p>Intuition: B is batch size, D is hidden dimension, F is up-projection dimension in MLP</p>
+<p>Let's do FLOPs and memory read/write accounting for the matrix multiplication (X * W).</p>
+<ol start="1"><li>Read X <font color="gray">(B x D)</font> from HBM</li></ol>
+<ol start="2"><li>Read W <font color="gray">(D x F)</font> from HBM</li></ol>
+<ol start="3"><li>Compute Y = X <font color="gray">(B x D)</font> @ W <font color="gray">(D x F)</font></li></ol>
+<ol start="4"><li>Write Y <font color="gray">(B x F)</font> to HBM</li></ol>
+<p>Recall that <strong>arithmetic intensity</strong> is how much compute we do per byte transferred (want to be high).</p>
+<p>Assuming B is much less than D and F, then we can simplify:</p>
+<p>Accelerator intensity of H100:</p>
+<p>If computation intensity &gt; accelerator intensity, <strong>compute-bound</strong> (good)</p>
+<p>If computation intensity &lt; accelerator intensity, <strong>memory-bound</strong> (bad)</p>
+<p>Conclusion: compute-bound iff B &gt; 295</p>
+<p>Extreme case (B = 1, corresponding to matrix-vector product):</p>
+<ul><li>Arithmetic intensity: 1</li></ul>
+<ul><li>Memory-bound (read D x F matrix, perform only 2 D F FLOPs)</li></ul>
+<ul><li>This is basically what happens with inference...</li></ul>
+<a class="ref" href="https://jax-ml.github.io/scaling-book/inference/" title="Scaling book chapter on inference">[Scaling book chapter on inference]</a>
+<figure><img src="var/files/image-7ba69ac6feff08da76241c8e1dcf334c-https_jax-ml_github_io_scaling-book_assets_img_naive-inference-1400_webp" style="width: 800px"></figure>
+<p>Naive inference: to generate each token, feed history into Transformer</p>
+<p>Complexity: generating T tokens requires O(T^3) FLOPs (one feedforward pass is O(T^2))</p>
+<p>Observation: a lot of the work can be shared across prefixes</p>
+<p>Solution: store <strong>KV cache</strong> in HBM</p>
+<figure><img src="var/files/image-1a4873c436f3fbe1d863837d3b38a114-https_jax-ml_github_io_scaling-book_assets_img_cached-inference-1400_webp" style="width: 800px"></figure>
+<p>KV cache: for every sequence (B), token (S), layer (L), head (K), store an H-dimensional vector</p>
+<p>Two stages of inference:</p>
+<ol start="1"><li><strong>Prefill</strong>: given a prompt, encode into vectors (parallelizable like in training)</li></ol>
+<ol start="2"><li><strong>Generation</strong>: generate new response tokens (sequential)</li></ol>
+<p>Let's compute the FLOPs and memory IO for both the MLP and attention layers.</p>
+<p>S is the number of tokens we're conditioning on, T is the number of tokens we're generating.</p>
+<p>Later, we'll specialize to prefill (T = S) and generation (T = 1).</p>
+<h3>MLP layers (only looking at the matrix multiplications)</h3>
+<ol start="1"><li>Read X <font color="gray">(B x T x D)</font> from HBM</li></ol>
+<ol start="2"><li>Read Wup <font color="gray">(D x F)</font>, Wgate <font color="gray">(D x F)</font>, Wdown <font color="gray">(F x D)</font> from HBM</li></ol>
+<ol start="3"><li>Compute U = X <font color="gray">(B x T x D)</font> @ Wup <font color="gray">(D x F)</font></li></ol>
+<ol start="4"><li>Write U <font color="gray">(B x T x F)</font> to HBM</li></ol>
+<ol start="5"><li>Compute G = X <font color="gray">(B x T x D)</font> @ Wgate <font color="gray">(D x F)</font></li></ol>
+<ol start="6"><li>Write G <font color="gray">(B x T x F)</font> to HBM</li></ol>
+<ol start="7"><li>Compute Y = GeLU(G)*U <font color="gray">(B x T x F)</font> @ Wdown <font color="gray">(F x D)</font></li></ol>
+<ol start="8"><li>Write Y <font color="gray">(B x T x D)</font> to HBM</li></ol>
+<p>Assume that B*T is much smaller than D and F.</p>
+<p>For the two stages:</p>
+<ol start="1"><li>Prefill: easy to make compute-bound (good) by making <code>B*T</code> large enough (large batches, long sequences)</li></ol>
+<ol start="2"><li>Generation: two problems</li></ol>
+<ul><li>Generating one token at a time (T = 1)</li></ul>
+<ul><li>B is number of concurrent requests, unpredictable for interactive applications</li></ul>
+<h3>Attention layers (focusing on the matrix multiplications with FlashAttention)</h3>
+<ul><li>S is number of previous tokens (already generated)</li></ul>
+<ul><li>T is number of next tokens (to generate logits for)</li></ul>
+<ol start="1"><li>Read Q <font color="gray">(B x T x D)</font>, K <font color="gray">(B x S x D)</font>, V <font color="gray">(B x S x D)</font> from HBM</li></ol>
+<ol start="2"><li>Compute A = Q <font color="gray">(B x T x D)</font> @ K <font color="gray">(B x S x D)</font></li></ol>
+<ol start="3"><li>Compute Y = softmax(A) <font color="gray">(B x S x T x K x G)</font> @ V <font color="gray">(B x S x K x H)</font></li></ol>
+<ol start="4"><li>Write Y <font color="gray">(B x T x D)</font> to HBM</li></ol>
+<p>For the two stages:</p>
+<ol start="1"><li>Prefill: T = S</li></ol>
+<ol start="2"><li>Generation: T = 1</li></ol>
+<p>Unlike MLPs, no dependence on B, so batching doesn't help!</p>
+<p>Why?</p>
+<ul><li>In MLP layers, every sequence hits the same MLP weights (Wup, Wgate, Wdown don't depend on B)</li></ul>
+<ul><li>In attention layers, every sequence has its own KV cache vectors (Q, K, V all depend on B)</li></ul>
+<p>Summary:</p>
+<ul><li>Prefill is compute-bound, generation is memory-bound</li></ul>
+<ul><li>Prefill MLP intensity: <code>B*S</code></li></ul>
+<ul><li>Prefill attention intensity: <code>S/2</code></li></ul>
+<ul><li>Generation MLP intensity: <code>B</code> (requires concurrent requests)</li></ul>
+<ul><li>Generation attention intensity: <code>&lt;1</code> (impossible to improve)</li></ul>
+<p>So we have shown that inference is memory-bound.</p>
+<p>Let us now compute the theoretical maximum latency and throughput of a single request.</p>
+<p>Assumption: can overlap compute and communication perfectly and ignore overhead.</p>
+<p>Instantiate latency and throughput for Llama 2 13B on an H100:</p>
+<p>Result: worse latency, better throughput</p>
+<p>Result: even worse latency, even better throughput</p>
+<p>Result: doesn't fit into memory and throughput gains are diminishing too...</p>
+<p>What increasing batch size does:</p>
+<ul><li>Worsens latency because larger KV cache (O(B) size) to read/write</li></ul>
+<ul><li>Improves throughput because amortizes the cost of reading parameters</li></ul>
+<p><strong>Tradeoff</strong> between latency and throughput:</p>
+<ol start="1"><li>Smaller batch sizes yield better latency but worse throughput</li></ol>
+<ol start="2"><li>Larger batch sizes yield better throughput but worse latency</li></ol>
+<p>Easy parallelism: if you launch M copies of the model, latency is the same, throughput increases by M!</p>
+<p>Harder parallelism: shard the model and the KV cache</p>
+<a class="ref" href="https://jax-ml.github.io/scaling-book/inference/" title="Scaling book chapter on inference">[Scaling book chapter on inference]</a>
+<p>Note: time-to-first-token (TTFT) is essentially a function of prefill time</p>
+<p>Use smaller batch sizes during prefill for faster TTFT</p>
+<p>Use larger batch sizes during generation to improve throughput</p>
+<h3>Taking shortcuts (lossy)</h3>
+<p>Recall that memory is the bottleneck for inference.</p>
+<p>So let's try to reduce the size of the KV cache</p>
+<p>...but make sure we don't lose too much accuracy.</p>
+<h3>Grouped-query attention (GQA)</h3>
+<a class="ref" href="https://arxiv.org/pdf/2305.13245.pdf" title="GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints">[Ainslie+ 2023]</a>
+<figure><img src="var/files/image-45c47d328aa951d9cbe28b4ae0074615-https_jax-ml_github_io_scaling-book_assets_img_gmqa_png" style="width: 800px"></figure>
+<p>Idea: N query heads, but only K key and value heads, each interacting with N/K query heads</p>
+<p>Multi-headed attention (MHA): K=N</p>
+<p>Multi-query attention (MQA): K=1</p>
+<p>Group-query attention (GQA): K is somewhere in between</p>
+<p>Latency/throughput improves:</p>
+<a class="ref" href="https://arxiv.org/pdf/2305.13245.pdf" title="GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints">[Ainslie+ 2023]</a>
+<figure><img src="images/gqa-speed.png" style="width: 500px"></figure>
+<p>Why does GQA improve latency and throughput?</p>
+<p>GQA reduces the KV cache by a factor of N/K.</p>
+<p>Reminder: reducing memory usage leads to speedup (since we're memory-bound).</p>
+<p>Result: Worse latency, but better throughput (and it fits in memory now!)</p>
+<p>Result: Worse latency, but better throughput (and still fits in memory!)</p>
+<p>Check that accuracy doesn't drop:</p>
+<a class="ref" href="https://arxiv.org/pdf/2305.13245.pdf" title="GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints">[Ainslie+ 2023]</a>
+<figure><img src="images/gqa-accuracy.png" style="width: 800px"></figure>
+<h3>Multi-head latent attention (MLA)</h3>
+<a class="ref" href="https://arxiv.org/abs/2405.04434" title="DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model">[DeepSeek-AI+ 2024]</a>
+<figure><img src="images/mla-schema.png" style="width: 800px"></figure>
+<p>Normal attention: KV cache consists of K = W_K h, V = W_V h (N*H dimensions)</p>
+<p>MLA: store compressed vector c = W_c h (C dimensions), project up to K = W_K c, V = W_V c when needed</p>
+<p>DeepSeek v2: reduce N*H = 16384 to C = 512</p>
+<p>Wrinkle: MLA is not compatible with RoPE, so need to add additional 64 dimensions for RoPE, so 512 + 64 = 576 total dimensions</p>
+<p>Latency/throughput improvements follow similarly from the KV cache reduction as argued earlier</p>
+<p>Let's now check the accuracy.</p>
+<p>First, MHA is better than GQA (though more expensive) [Table 8]</p>
+<a class="ref" href="https://arxiv.org/abs/2405.04434" title="DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model">[DeepSeek-AI+ 2024]</a>
+<figure><img src="images/mla-accuracy.png" style="width: 800px"></figure>
+<p>Second, MLA is even a bit better than MHA (and much cheaper) [Table 9]</p>
+<a class="ref" href="https://arxiv.org/abs/2405.04434" title="DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model">[DeepSeek-AI+ 2024]</a>
+<figure><img src="images/mla-accuracy2.png" style="width: 800px"></figure>
+<h3>Cross-layer attention (CLA)</h3>
+<a class="ref" href="https://arxiv.org/abs/2405.12981" title="Reducing Transformer Key-Value Cache Size with Cross-Layer Attention">[Brandon+ 2024]</a>
+<figure><img src="images/cla-diagram.png" style="width: 500px"></figure>
+<p>Idea: share KVs across <strong>layers</strong> (just as GQA shares KVs across heads)</p>
+<p>Empirically improves the pareto frontier of accuracy and KV cache size (latency and throughput)</p>
+<figure><img src="images/cla-results.png" style="width: 700px"></figure>
+<h3>Local (sliding window) attention</h3>
+<a class="ref" href="https://arxiv.org/pdf/2004.05150.pdf" title="Longformer: The Long-Document Transformer">[Beltagy+ 2020]</a>
+<a class="ref" href="https://arxiv.org/pdf/1904.10509.pdf" title="Generating Long Sequences with Sparse Transformers">[Child+ 2019]</a>
+<a class="ref" href="https://arxiv.org/pdf/2310.06825.pdf" title="Mistral 7B">[Jiang+ 2023]</a>
+<figure><img src="images/longformer-attention.png" style="width: 800px"></figure>
+<p>Idea: just look at the local context, which is most relevant for modeling</p>
+<p>Effective context scales linearly with the number of layers</p>
+<p>KV cache is independent of sequence length!</p>
+<p>Problem: this can still hurt accuracy</p>
+<p>Solution: interleave local attention with global attention (hybrid layers)</p>
+<h3>DeepSeek v4 attention</h3>
+<ul><li>Supports 1M context length</li></ul>
+<a class="ref" href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf" title="DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence">[DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence]</a>
+<figure><img src="images/deepseek-v4-attention.png" style="width: 800px"></figure>
+<ul><li>Compressed Sparse Attention (CSA): compresses every m tokens into 1</li></ul>
+<ul><li>DeepSeek Sparse Attention (DSA): selects the top k</li></ul>
+<ul><li>Heavily Compressed Attention (HCA): compresses even more</li></ul>
+<p>Summary:</p>
+<ul><li>Goal: reduce the KV cache size (since inference is memory-bound) without hurting accuracy</li></ul>
+<ul><li>Lower-dimensional KV cache (GQA, MLA, CLA)</li></ul>
+<ul><li>Local attention (truncates the KV cache) on some of the layers</li></ul>
+<ul><li>Other ideas: linear attention / state-space-models (Mamba 2, GatedDeltaNet), diffusion models</li></ul>
+<p>Key idea: reduce the precision of numbers</p>
+<p>Less memory means higher latency/throughput (since inference is memory-bound).</p>
+<p>Of course we have to worry about accuracy...</p>
+<figure><img src="var/files/image-6e6964259cf3d5a080f18d21764d2bec-https_www_datocms-assets_com_104802_1709770809-twitter-post-20_png" style="width: 400px"></figure>
+<a class="ref" href="https://www.baseten.co/blog/fp8-efficient-model-inference-with-8-bit-floating-point-numbers/" title="article">[article]</a>
+<ul><li>fp32 (4 bytes): needed for parameters and optimizer states during training</li></ul>
+<ul><li>bf16 (2 bytes): default for inference</li></ul>
+<ul><li>fp8 (1 byte) [-240, 240] for e4m3 on H100s: can train if you dare</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2310.18313" title="FP8-LM: Training FP8 Large Language Models">[Peng+ 2023]</a>
+<ul><li>int8 (1 byte) [-128, 127]: less accurate but cheaper than fp8, but for inference only</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2303.17951" title="FP8 versus INT8 for efficient deep learning inference">[Baalen+ 2023]</a>
+<ul><li>int4 (0.5 bytes) [-8, 7]: cheaper, even less accurate</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2303.17951" title="FP8 versus INT8 for efficient deep learning inference">[Baalen+ 2023]</a>
+<a class="ref" href="https://apxml.com/posts/llm-quantization-techniques-explained" title="Overview of approaches">[Overview of approaches]</a>
+<p>Quantization-aware training (QAT)</p>
+<ul><li>During training, quantize-and-dequantize during the forward pass to simulate quantization errors</li></ul>
+<ul><li>Pro: weights are trained to work with quantization</li></ul>
+<ul><li>Con: requires expensive large-scale training</li></ul>
+<p>Post-training quantization (PTQ):</p>
+<ul><li>Done after training, so much cheaper</li></ul>
+<ul><li>Run on sample data to determine scale and zero point for each layer or tensor</li></ul>
+<ul><li>GPTQ: use Hessian information to update non-quantized weights to account for quantization error</li></ul>
+<a class="ref" href="https://arxiv.org/abs/2210.17323" title="GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers">[Frantar+ 2022]</a>
+<h3>Activation-aware quantization (AWQ)</h3>
+<a class="ref" href="https://arxiv.org/abs/2306.00978" title="AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration">[Lin+ 2023]</a>
+<ul><li>Observation: some activation channels are large</li></ul>
+<ul><li>Weights that hit those matter more</li></ul>
+<ul><li>Allocate more precision to those weights</li></ul>
+<ul><li>Idea: select which weights (0.1-1%) to keep in high precision based on activations</li></ul>
+<ul><li>fp16 → int3 produces 4x lower memory, 3.2x speedup</li></ul>
+<figure><img src="images/awq-schema.png" style="width: 800px"></figure>
+<p>Key idea: just rip out parts of an expensive model to make it cheaper</p>
+<p>...and then fix it up.</p>
+<p>Paper from NVIDIA</p>
+<a class="ref" href="https://arxiv.org/abs/2407.14679" title="Compact Language Models via Pruning and Knowledge Distillation">[Muralidharan+ 2024]</a>
+<figure><img src="images/pruning-kd-loop.png" style="width: 600px"></figure>
+<p>Algorithm:</p>
+<ol start="1"><li>Identify important {layer, head, hidden dimension} on a small calibration dataset (1024 samples)</li></ol>
+<ol start="2"><li>Remove unimportant layers to get a smaller model</li></ol>
+<ol start="3"><li>Distill the original model into pruned model</li></ol>
+<p>Results:</p>
+<figure><img src="images/pruning-kd.png" style="width: 500px"></figure>
+<p>Summary: reduce inference complexity without hurting accuracy</p>
+<p>From scratch recipe:</p>
+<ol start="1"><li>Define faster model architecture</li></ol>
+<ol start="2"><li>Train faster model</li></ol>
+<p>Distillation recipe:</p>
+<ol start="1"><li>Define faster model architecture</li></ol>
+<ol start="2"><li>Initialize weights using original model (which has a different architecture)</li></ol>
+<ol start="3"><li>Repair faster model (distillation)</li></ol>
+<h3>Use shortcuts but double check (lossless)</h3>
+<p>Recall the two stages of inference:</p>
+<ul><li>Prefill: given a sequence, encode tokens in parallel (compute-bound) [note: also gives you probabilities]</li></ul>
+<ul><li>Generation: generate one token at a time (memory-bound)</li></ul>
+<p>In other words, checking is faster than generation.</p>
+<p>Speculative sampling</p>
+<a class="ref" href="https://arxiv.org/abs/2211.17192" title="Fast Inference from Transformers via Speculative Decoding">[Leviathan+ 2022]</a>
+<a class="ref" href="https://arxiv.org/abs/2302.01318" title="Accelerating Large Language Model Decoding with Speculative Sampling">[Chen+ 2023]</a>
+<ul><li>Use a cheaper <strong>draft model</strong> p to guess a few tokens (e.g., 4)</li></ul>
+<ul><li>Evaluate with target model q (process tokens in parallel), and accept if it looks good</li></ul>
+<a class="ref" href="https://storage.googleapis.com/gweb-research2023-media/media/SpeculativeDecoding-1-Illustration.mp4" title="Speculative sampling video">[Speculative sampling video]</a>
+<a class="ref" href="https://research.google/blog/looking-back-at-speculative-decoding/" title="article">[article]</a>
+<figure><img src="images/speculative-sampling-algorithm.png" style="width: 600px"></figure>
+<p>This is modified rejection sampling with proposal p and target q</p>
+<p>Modification: always generate at least one candidate (rejection sampling will keep looping)</p>
+<p>Key property: guaranteed to be an <strong>exact sample</strong> from the target model!</p>
+<p>Proof by example: assume two vocabulary elements {A, B}</p>
+<ul><li>Target model probabilities: [q(A), q(B)]</li></ul>
+<ul><li>Draft model probabilities: [p(A), p(B)]</li></ul>
+<ul><li>Assume p(A) &gt; q(A) [draft model oversamples A].</li></ul>
+<ul><li>Therefore p(B) &lt; q(B) [draft model undersamples B].</li></ul>
+<ul><li>Residual probabilities max(q-p, 0): [0, 1]</li></ul>
+<p>Compute the probabilities of speculatively sampling a token:</p>
+<ul><li>P[sampling A] = p(A) <em> (q(A) / p(A)) + p(B) </em> 1 * 0 = q(A)</li></ul>
+<ul><li>P[sampling B] = p(B) <em> 1 + p(A) </em> (1 - q(A) / p(A)) * 1 = q(B)</li></ul>
+<figure><img src="images/speculative-sampling-results.png" style="width: 600px"></figure>
+<figure><img src="images/speculative-sampling-stats.png" style="width: 600px"></figure>
+<p>In practice:</p>
+<ul><li>Target model has 70B parameters, draft model has 8B parameters</li></ul>
+<ul><li>Target model has 8B parameters, draft model has 1B parameters</li></ul>
+<ul><li>Try to make draft model as close to target (distillation)</li></ul>
+<p>Extensions to improve the draft model:</p>
+<ul><li>Medusa: draft model generates multiple tokens in parallel</li></ul>
+<a class="ref" href="https://arxiv.org/abs/2401.10774" title="Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads">[Cai+ 2024]</a>
+<ul><li>EAGLE: draft model takes high-level features from target model</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2401.15077" title="EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty">[Li+ 2024]</a>
+<figure><img src="images/medusa-eagle.png" style="width: 600px"></figure>
+<p>Summary:</p>
+<ul><li>Exact sampling from target model (thanks to math)!</li></ul>
+<ul><li>Exploits asymmetry between checking and generation</li></ul>
+<ul><li>Lots of room for innovation on the draft model (involves training)</li></ul>
+<h3>Handling dynamic workloads</h3>
+<p>Batching over sequences in live traffic is tricky because:</p>
+<ol start="1"><li>Requests arrive at different times (waiting for batch is bad for early requests)</li></ol>
+<ol start="2"><li>Sequences have shared prefixes (e.g., system prompts, generating multiple samples)</li></ol>
+<ol start="3"><li>Sequences have different lengths (padding is inefficient)</li></ol>
+<a class="ref" href="https://www.usenix.org/system/files/osdi22-yu.pdf" title="Orca: A Distributed Serving System for Transformer-Based Generative Models">[Orca: A Distributed Serving System for Transformer-Based Generative Models]</a>
+<a class="ref" href="https://www.youtube.com/watch?v=Ob9PPLxETYU" title="talk">[talk]</a>
+<p>Problem:</p>
+<ul><li>Training: get a dense block of tokens (batch size x sequence length)</li></ul>
+<ul><li>Inference: requests arrive and finish at different times, so you have a ragged array</li></ul>
+<figure><img src="var/files/image-1d1ec88764cc9f6eee8cc00bfce35f75-https_images_ctfassets_net_xjan103pcp94_1LJioEsEdQQpDCxYNWirU6_82b9fbfc5b78b10c1d4508b60e72fdcf_cb_02_diagram-static-batching_png" style="width: 600px"></figure>
+<p>Solution: iteration-level scheduling</p>
+<ul><li>Decode step by step</li></ul>
+<ul><li>Add new requests to the batch as they arrive (so don't have to wait until generation completes)</li></ul>
+<p>Problem:</p>
+<ul><li>Batching only works when all sequences have the same dimensionality (right?)</li></ul>
+<ul><li>But each request might have a different length</li></ul>
+<p>Solution: selective batching</p>
+<ul><li>Training: when all sequences of the same length, operate on a B x S x H tensor</li></ul>
+<ul><li>But we might have different lengths: [3, H], [9, H], [5, H], etc.</li></ul>
+<ul><li>Attention computation: process each sequence separately</li></ul>
+<ul><li>Non-attention computation: concatenate all the sequences together to [3 + 9 + 5, H]</li></ul>
+<p>Paper that introduced vLLM in addition to PagedAttention</p>
+<a class="ref" href="https://arxiv.org/pdf/2309.06180.pdf" title="Efficient Memory Management for Large Language Model Serving with PagedAttention">[Kwon+ 2023]</a>
+<p>Previous status quo:</p>
+<ul><li>Request comes in</li></ul>
+<ul><li>Allocate section of KV cache for prompt and response (up to a max length)</li></ul>
+<figure><img src="images/paged-attention-fragmentation.png" style="width: 800px"></figure>
+<p>Problem: fragmentation (what happens to your hard drive)</p>
+<ul><li>But this is wasteful since we might generate much fewer tokens (internal fragmentation)!</li></ul>
+<ul><li>Might be extra unused space between sections (external fragmentation)!</li></ul>
+<p>Solution: PagedAttention (remember operating systems)</p>
+<ul><li>Divide the KV cache of a sequence into non-contiguous <strong>blocks</strong></li></ul>
+<figure><img src="images/paged-attention-blocks.png" style="width: 400px"></figure>
+<p>Two requests share the KV caches:</p>
+<figure><img src="images/paged-attention-logical.png" style="width: 800px"></figure>
+<p>In general, multiple types of sharing KV caches across sequences:</p>
+<figure><img src="images/paged-attention-sharing.png" style="width: 600px"></figure>
+<ul><li>Sharing the system prompt</li></ul>
+<ul><li>Sampling multiple responses per prompt (e.g., for program synthesis)</li></ul>
+<p>Solution: share prefixes, copy-on-write at the block level</p>
+<figure><img src="images/paged-attention-parallel.png" style="width: 600px"></figure>
+<p>Other vLLM optimizations:</p>
+<ul><li>Kernel to fuse block read and attention (reduce kernel launch overhead)</li></ul>
+<ul><li>Use latest kernels (FlashAttention, FlashDecoding)</li></ul>
+<ul><li>Use CUDA graphs to avoid kernel launch overhead</li></ul>
+<p>Summary: use ideas from operating systems (paging) to make use of memory for dynamic workloads</p>
+<h3>Summary</h3>
+<ul><li>Inference is important (actual use, evaluation, reinforcement learning)</li></ul>
+<ul><li>Different characteristics compared to training (memory-bound, dynamic)</li></ul>
+<ul><li>Techniques: new architectures, quantization, pruning/distillation, speculative sampling</li></ul>
+<ul><li>Ideas from systems (speculative execution, paging)</li></ul>
+<ul><li>New architectures have huge potential for improvement</li></ul>
+</main>
+</body>
+</html>

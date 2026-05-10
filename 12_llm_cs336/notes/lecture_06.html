@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecture 06</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #18202a; }
+    main { max-width: 920px; margin: 0 auto; padding: 44px 28px 72px; background: white; min-height: 100vh; }
+    h1, h2, h3 { line-height: 1.18; margin: 1.45em 0 0.45em; }
+    h1 { font-size: 2.1rem; }
+    h2 { font-size: 1.55rem; border-top: 1px solid #e6e8ec; padding-top: 1.1em; }
+    h3 { font-size: 1.22rem; }
+    p, li, blockquote { font-size: 1.02rem; line-height: 1.58; }
+    p { margin: 0.55em 0; }
+    ul, ol { margin: 0.35em 0 0.35em 1.35em; padding: 0; }
+    blockquote { margin: 1em 0; padding: 0.7em 1em; border-left: 4px solid #c8d1dc; background: #f7f9fb; }
+    a { color: #2457d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .ref { margin-left: 0.2em; white-space: nowrap; }
+    figure { margin: 1.1em 0; text-align: center; }
+    img, video { max-width: 100%; height: auto; border: 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef1f5; padding: 0.08em 0.28em; border-radius: 4px; }
+    @media print {
+      body { background: white; }
+      main { padding: 0; max-width: none; }
+      a { color: #18202a; }
+      h2 { break-after: avoid; }
+      figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<p>Last lecture: high-level overview of GPUs and performance</p>
+<p>This lecture: benchmarking/profiling + writing kernels</p>
+<h2>Hardware</h2>
+<figure><img src="images/gpu-hardware.png" style="width: 800px"></figure>
+<p>| Accelerator                        | A100      | H100      | B200      |</p>
+<p>+------------------------------------+-----------+-----------+-----------+</p>
+<p>| # SMs                              |       108 |       132 |       148 |</p>
+<p>+------------------------------------+-----------+-----------+-----------+</p>
+<p>| Register size (per SM)             |    256 KB |    256 KB |    256 KB |</p>
+<p>| L1 cache + shared memory (per SM)  |    192 KB |    256 KB |    256 KB |</p>
+<p>| L2 cache size                      |     40 MB |     50 MB | 96-126 MB |</p>
+<p>| HBM size                           |     80 GB |     80 GB |    192 GB |</p>
+<p>+------------------------------------+-----------+-----------+-----------+</p>
+<p>| Register bandwidth                 | ~116 TB/s | ~401 TB/s | ~447 TB/s |</p>
+<p>| L1 cache + shared memory bandwidth |  ~19 TB/s |  ~33 TB/s |  ~19 TB/s |</p>
+<p>| L2 cache bandwidth                 | ~5-8 TB/s |  ~12 TB/s |   ~9 TB/s |</p>
+<p>| HBM bandwidth                      |    2 TB/s | 3.35 TB/s |    8 TB/s |</p>
+<p>(B200s also have tensor memory (TMEM) for tensor cores (between registers and shared memory) that are invisible to programmer.)</p>
+<h2>Programming model</h2>
+<figure><img src="var/files/image-1390e250b108c0d04b315ac7995eccd0-https_docs_nvidia_com_cuda_parallel-thread-execution__images_grid-with-CTAs_png" style="width: 600px"></figure>
+<ul><li><em>Thread</em>: executes code on a small part of the data</li></ul>
+<ul><li><em>Thread block</em> or concurrent thread array (CTA): a group of threads</li></ul>
+<ul><li><em>Grid</em>: collection of thread blocks</li></ul>
+<p>(H100s and B200s also have thread block clusters that enable distributed shared memory.)</p>
+<p>Why thread blocks?</p>
+<p>For elementwise operations (e.g., GeLU), threads are most natural: each thread processes one element.</p>
+<ul><li>f(i) for i = 0, ..., N-1</li></ul>
+<p>However, for non-elementwise operations like softmax or matrix multiplication, threads need to communicate.</p>
+<p>Reading/writing from HBM is slow, so use shared memory (local to SM).</p>
+<p>Thread block: a collection of threads that access the same shared memory.</p>
+<p>Consequently, a thread block is scheduled on one SM.</p>
+<p>In Triton, think natively in terms of thread blocks (later).</p>
+<h2>Interaction between programming model and hardware</h2>
+<p>Programming model provides an abstraction of the hardware.</p>
+<p>In principle, don't need to think about anything else (for correctness).</p>
+<p>In practice, performance is very sensitive to the hardware, so need to understand it to obtain high performance.</p>
+<p>Let's go over some considerations.</p>
+<p><strong>Warps</strong>:</p>
+<ul><li>Within a thread block, threads are grouped into warps (32 threads per warp).</li></ul>
+<ul><li>Example: thread block has 64 threads =&gt; it has 2 warps.</li></ul>
+<p>| TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT | TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT |</p>
+<ul><li>All threads within a warp must execute same instructions in lockstep on an SM.</li></ul>
+<ul><li>Control divergence: if different threads in a warp need to execute different instructions (if A, else B), must be done sequentially (bad)</li></ul>
+<p>| AAAAAAAAA....................... |</p>
+<p>| .........BBBBBBBBBBBBBBBBBBBBBBB |</p>
+<ul><li>SM runs multiple warps and switches between them (e.g., when one warp is blocked on HBM reads/writes) with zero cost.</li></ul>
+<p><strong>(Warp) occupancy</strong>:</p>
+<ul><li>Each thread can use between 0 and 255 registers.</li></ul>
+<ul><li>The more registers threads use, the fewer threads can be scheduled on an SM (low occupancy).</li></ul>
+<ul><li>Low occupancy isn't necessarily bad if each thread is doing more work.</li></ul>
+<ul><li>Example: thread coarsening (each thread processes multiple elements).</li></ul>
+<ul><li>Example: thread block has 64 threads, each using 160 registers, SM has 65536 registers</li></ul>
+<p><strong>Bank conflicts</strong> (shared memory):</p>
+<ul><li>Shared memory is divided into 32 banks, each 4 bytes wide.</li></ul>
+<p>B00 B01 B02 B03 B04 B05 B06 B07 B08 B09 B10 B11 B12 B13 B14 B15 B16 B17 B18 B19 B20 B21 B22 B23 B24 B25 B26 B27 B28 B29 B30 B31</p>
+<p>... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ...</p>
+<p>... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ...</p>
+<p>... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ...</p>
+<ul><li>Each cycle, each bank can only be accessed by one thread (if not the same exact location).</li></ul>
+<ul><li>If multiple threads access the same bank, accesses serialized (bank conflict).</li></ul>
+<ul><li>Worst case example: matrix where each row spans all banks; 32 threads accessing first column results in 32-way bank conflict!</li></ul>
+<ul><li>Unavoidable: when doing matmul A @ B, access rows of A and columns of B</li></ul>
+<ul><li>Solution: swizzling rearranges shared memory (e.g., row xor col) to avoid bank conflicts</li></ul>
+<p><strong>Memory coalescing</strong> (HBM):</p>
+<ul><li>When the 32 threads in a warp access HBM, memory accesses combined into transactions of 128 bytes (cache lines).</li></ul>
+<p>M00 M01 M02 M03 M04 M05 M06 M07 M08 M09 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31</p>
+<p>M32 M33 M34 M35 M36 M37 M38 M39 M40 M41 M42 M43 M44 M45 M46 M47 M48 M49 M50 M51 M52 M53 M54 M55 M56 M57 M58 M59 M60 M61 M62 M63</p>
+<ul><li>Best case: full coalescing, all threads access the same cache line (32 threads x 4 bytes = 128 bytes).</li></ul>
+<p><strong>Block occupancy</strong>:</p>
+<figure><img src="var/files/image-f256f44a88048865b9ad6afcedde912b-https_developer-blogs_nvidia_com_wp-content_uploads_2019_06_pasted-image-0_png" style="width: 400px"></figure>
+<ul><li>Thread blocks scheduled onto SMs in waves.</li></ul>
+<ul><li>B200 has 148 SMs, if we launch 160 thread blocks, first wave has 148 blocks, second wave has 12 blocks.</li></ul>
+<ul><li>Wave quantization problem: last wave has fewer thread blocks, leaving some SMs idle (low block occupancy).</li></ul>
+<ul><li>Solution: make number of thread blocks divide # SMs.</li></ul>
+<p>Summary:</p>
+<ul><li>Programming model: grid (HBM) -&gt; thread block (shared memory) -&gt; thread (registers)</li></ul>
+<ul><li>Details of hardware (warps, bank conflicts, memory coalescing, occupancy) determine performance</li></ul>
+<p>Recipe for success:</p>
+<ol start="1"><li>Benchmark and profile your code</li></ol>
+<ol start="2"><li>Make changes</li></ol>
+<ol start="3"><li>Benchmark and profile your code again</li></ol>
+<p>Benchmarking measures the wall-clock time of performing some operation.</p>
+<p>It only gives you end-to-end time, not where time is spent (profiling).</p>
+<p>It is still useful for:</p>
+<ul><li>comparing different implementations (which is faster?), and</li></ul>
+<ul><li>understanding how performance scales (e.g., with dimension).</li></ul>
+<p>You can use <a href="https://pytorch.org/tutorials/recipes/recipes/benchmark.html"><code>torch.utils.benchmark</code></a>.</p>
+<p>We will roll our own to make benchmarking more transparent.</p>
+<p>Note: time is roughly constant when dimension is small, then cubic scaling.</p>
+<p>While benchmarking looks at end-to-end time, profiling looks at where time is spent.</p>
+<p>Independent of time, profiling also helps you understand what's going under the hood.</p>
+<p>PyTorch has a built-in <a href="https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html">profiler</a>.</p>
+<p>In your assignment, you will use nsight to get more details.</p>
+<h2>add(dim=2048)</h2>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::CUDAFunctor_add&lt;float&gt;, std::array&lt;...         0.00%       0.000us         0.00%       0.000us       0.000us       4.960us       100.00%       4.960us       4.960us             1</p>
+<p>Activity Buffer Request        97.35%       3.301ms        97.35%       3.301ms       3.301ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaLaunchKernel         2.02%      68.587us         2.02%      68.587us      68.587us       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaDeviceSynchronize         0.63%      21.269us         0.63%      21.269us      10.635us       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 3.391ms</p>
+<p>Self CUDA time total: 4.960us</p>
+
+<h2>matmul(dim=2048)</h2>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>cutlass3x_sm100_simt_sgemm_f32_f32_f32_f32_f32_64x64x16_1x1x1_3_nnn_align1_bias_f32_relu         0.00%       0.000us         0.00%       0.000us       0.000us     329.345us       100.00%     329.345us     329.345us             1</p>
+<p>cuLaunchKernelEx         0.95%      27.515us        99.46%       2.867ms       2.867ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>Activity Buffer Request        98.50%       2.839ms        98.50%       2.839ms       2.839ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaDeviceSynchronize         0.54%      15.626us         0.54%      15.626us       7.813us       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 2.883ms</p>
+<p>Self CUDA time total: 329.345us</p>
+
+<h2>matmul(dim=128)</h2>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>cutlass3x_sm100_simt_sgemm_f32_f32_f32_f32_f32_32x32x16_1x1x1_3_nnn_align1_bias_f32_relu         0.00%       0.000us         0.00%       0.000us       0.000us       4.544us       100.00%       4.544us       4.544us             1</p>
+<p>cuLaunchKernelEx         0.78%      32.090us        99.60%       4.118ms       4.118ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>Activity Buffer Request        98.83%       4.085ms        98.83%       4.085ms       4.085ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaDeviceSynchronize         0.40%      16.357us         0.40%      16.357us       8.178us       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>--------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 4.134ms</p>
+<p>Self CUDA time total: 4.544us</p>
+
+<p>Observations:</p>
+<ul><li>You can see which CUDA kernels are actually being called (the long names).</li></ul>
+<ul><li>Different CUDA kernels are invoked depending on the tensor dimensions.</li></ul>
+<p>Name of CUDA kernel tells us something about the implementation.</p>
+<p>Example: cutlass3x_sm100_simt_sgemm_f32_f32_f32_f32_f32_64x64x16_1x1x1_3_nnn_align1_bi...</p>
+<ul><li>cutlass: NVIDIA's CUDA library for linear algebra</li></ul>
+<ul><li>sm100: corresponds to the NVIDIA Blackwell architecture (B200)</li></ul>
+<ul><li>f32: float32</li></ul>
+<ul><li>64x64x16: tile shape (more on this later)</li></ul>
+<p>Benchmark and profile your code!</p>
+<p>Let's benchmark and profile the <a href="https://pytorch.org/docs/stable/generated/torch.nn.GELU.html">GeLU activation function</a>.</p>
+<p>The builtin and compiled versions are significantly faster!</p>
+<p>To understand why, let's look at the profiler to see where time is being spent.</p>
+<h2>naive_gelu</h2>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::BinaryFunctor&lt;float, float, float, ...         0.00%       0.000us         0.00%       0.000us       0.000us       1.381ms        40.80%       1.381ms     460.394us             3</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::AUnaryFunctor&lt;float, float, float, ...         0.00%       0.000us         0.00%       0.000us       0.000us     926.431us        27.36%     926.431us     308.810us             3</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::CUDAFunctor_add&lt;float&gt;, std::array&lt;...         0.00%       0.000us         0.00%       0.000us       0.000us     460.735us        13.61%     460.735us     460.735us             1</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::tanh_kernel_cuda(at::TensorIterator...         0.00%       0.000us         0.00%       0.000us       0.000us     308.927us         9.13%     308.927us     308.927us             1</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::CUDAFunctorOnSelf_add&lt;float&gt;, std::...         0.00%       0.000us         0.00%       0.000us       0.000us     308.224us         9.10%     308.224us     308.224us             1</p>
+<p>Activity Buffer Request        15.58%     775.108us        15.58%     775.108us     775.108us       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaLaunchKernel        26.41%       1.314ms        26.41%       1.314ms     145.976us       0.000us         0.00%       0.000us       0.000us             9</p>
+<p>cudaDeviceSynchronize        58.01%       2.886ms        58.01%       2.886ms       1.443ms       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 4.975ms</p>
+<p>Self CUDA time total: 3.385ms</p>
+
+<h2>builtin_gelu</h2>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>void at::native::vectorized_elementwise_kernel&lt;4, at::native::GeluCUDAKernelImpl(at::TensorIterat...         0.00%       0.000us         0.00%       0.000us       0.000us     305.409us       100.00%     305.409us     305.409us             1</p>
+<p>Activity Buffer Request        77.34%       1.002ms        77.34%       1.002ms       1.002ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaLaunchKernel        21.88%     283.606us        21.88%     283.606us     283.606us       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaDeviceSynchronize         0.78%      10.070us         0.78%      10.070us       5.035us       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>----------------------------------------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 1.296ms</p>
+<p>Self CUDA time total: 305.409us</p>
+
+<h2>compiled_gelu</h2>
+<p>-----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls</p>
+<p>-----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>triton_poi_fused_add_mul_tanh_0         0.00%       0.000us         0.00%       0.000us       0.000us     342.848us       100.00%     342.848us     342.848us             1</p>
+<p>Activity Buffer Request        85.72%       1.111ms        85.72%       1.111ms       1.111ms       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cuLaunchKernel        13.50%     174.982us        13.50%     174.982us     174.982us       0.000us         0.00%       0.000us       0.000us             1</p>
+<p>cudaDeviceSynchronize         0.78%      10.098us         0.78%      10.098us       5.049us       0.000us         0.00%       0.000us       0.000us             2</p>
+<p>-----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------</p>
+<p>Self CPU time total: 1.296ms</p>
+<p>Self CUDA time total: 342.848us</p>
+
+<p>Notes:</p>
+<ul><li>Naive implementation: multiple kernels, requires many reads/writes from/to HBM (<strong>no fusion</strong>).</li></ul>
+<ul><li>Builtin and compiled versions: one kernel (<strong>kernel fusion</strong>), one read from HBM, one write to HBM.</li></ul>
+<ul><li>The compiled kernel is a Triton kernel.</li></ul>
+<figure><img src="var/files/image-1390e250b108c0d04b315ac7995eccd0-https_docs_nvidia_com_cuda_parallel-thread-execution__images_grid-with-CTAs_png" style="width: 600px"></figure>
+<p>In CUDA (developed by NVIDIA), specify what each thread does.</p>
+<ul><li>Pros: fine-grained control</li></ul>
+<ul><li>Cons: need to manage more things (e.g., shared memory)</li></ul>
+<p>In Triton (developed by OpenAI), specify what each thread block does.</p>
+<ul><li>Generally powerful enough (especially when getting started)</li></ul>
+<ul><li>Conceptual framework: load data into shared memory, operate on it, write back to global memory</li></ul>
+<p>Let's write the Triton kernel for GeLU.</p>
+<p>Triton compiles down to PTX (parallel thread execution), an assembly language for GPUs.</p>
+<p>We can see the PTX code generated by Triton.</p>
+<a class="ref" href="https://github.com/stanford-cs336/lectures/blob/main/var/triton_gelu-ptx.txt" title="[https://github.com/stanford-cs336/lectures/blob/main/var/triton_gelu-ptx.txt]">[https://github.com/stanford-cs336/lectures/blob/main/var/triton_gelu-ptx.txt]</a>
+<p>Observations:</p>
+<ul><li>ld.global.<em> and st.global.</em> reads and writes from global memory</li></ul>
+<ul><li>%ctaid.x is block index, %tid.x is thread index</li></ul>
+<ul><li>%f<em> are floating point registers, %r</em> are integer registers</li></ul>
+<ul><li>One thread processes 8 elements at the same time (thread coarsening)</li></ul>
+<p>So far, we've looked at elementwise operations in Triton (e.g., GeLU).</p>
+<p>Now let us look at operations that aggregate over multiple values.</p>
+<p>We will roughly follow the Triton fused softmax tutorial:</p>
+<a class="ref" href="https://triton-lang.org/main/getting-started/tutorials/02-fused-softmax.html" title="[https://triton-lang.org/main/getting-started/tutorials/02-fused-softmax.html]">[https://triton-lang.org/main/getting-started/tutorials/02-fused-softmax.html]</a>
+<p>Recall the softmax operation is used in attention and generating probabilities.</p>
+<p>Exponentiate and normalize each row of a matrix:</p>
+<p>[0 0 0]      =&gt;   [1/3 1/3 1/3]</p>
+<p>[1 1 -inf]        [1/2 1/2 0  ]</p>
+<p>Let's first start with the naive implementation and keep track of reads/writes.</p>
+<p>Now let us write the Triton kernel.</p>
+<figure><img src="images/triton-softmax.png" style="width: 600px"></figure>
+<p>In the softmax example, an entire row fits in a block, so the reduction happens within a block (handled by Triton).</p>
+<p>What if the row doesn't fit in a block?</p>
+<p>Example: 4096 columns, but block size is 1024...</p>
+<p>Strategy:</p>
+<ul><li>Break up row into tiles (4 in the example above)</li></ul>
+<ul><li>Each thread iterates over tiles and accumulates a sum</li></ul>
+<ul><li>Do final reduction (sum) over accumulators of each thread (shared memory or warp shuffles)</li></ul>
+<p>Consider the simpler example (row sum instead of softmax):</p>
+<figure><img src="images/triton-row-sum.png" style="width: 600px"></figure>
+<p>Matrix multiplication is the bread and butter of deep learning.</p>
+<p>How should we build a matmul kernel?</p>
+<p>|        k                  n</p>
+<p>|   [ A1 A2 A3 ]       [ B1 B2 B3 ]   [ C1 C2 C3 ]</p>
+<p>| m [ A4 A5 A6 ]  *  k [ B4 B5 B6 ] = [ C4 C5 C6 ]</p>
+<p>|   [ A7 A8 A9 ]       [ B7 B8 B9 ]   [ C7 C8 C9 ]</p>
+<p><strong>Naive approach:</strong></p>
+<p>Fix any (m, n).</p>
+<p>For each k:</p>
+<ul><li>Read A[m, k] and B[k, n] from HBM.</li></ul>
+<ul><li>Multiply and accumulate.</li></ul>
+<p>Write result to C[m, n] in HBM.</p>
+<p>Bottleneck: M K N reads, M N writes</p>
+<p>Arithmetic intensity: O(1)</p>
+<p>Computing C4 and C5 both need A4, A5, A6.</p>
+<p>Can we read A4, A5, A6 from HBM once to compute both?</p>
+<p>Answer: yes, using shared memory!</p>
+<p><strong>Idealized approach:</strong></p>
+<ul><li>Load all of A and B into shared memory, then compute C.</li></ul>
+<ul><li>Now we get M K + K N reads and M N writes.</li></ul>
+<ul><li>This yields the idealized O(N) arithmetic intensity from before.</li></ul>
+<ul><li>However, A and B are usually too large to fit in shared memory.</li></ul>
+<p><strong>Tiling:</strong></p>
+<figure><img src="images/gemm_tiled.png" style="width: 600px"></figure>
+<p>Key idea: divide the matrix C into output tiles (thread blocks).</p>
+<p>Fix an output tile in C.</p>
+<p>For each pair of (row tile of A, column tile of B):</p>
+<ul><li>Load the corresponding A tile and B tile from HBM into shared memory.</li></ul>
+<ul><li>Perform matrix multiplication on the tiles.</li></ul>
+<ul><li>Accumulate into the partial sum (in shared memory).</li></ul>
+<p>Write output tile to HBM.</p>
+<p>Arithmetic intensity: O(tile_size).</p>
+<p>Bonus:</p>
+<ul><li>Often, you want to apply an elementwise activation function.</li></ul>
+<ul><li>Example: GeLU(A @ B)</li></ul>
+<ul><li>Solution: kernel fusion!</li></ul>
+<p><strong>Implementation.</strong></p>
+<p>Review: each matrix is linearized in memory</p>
+<p>Summary:</p>
+<ul><li>Know the programming model (PyTorch, Triton, PTX) to give you correctness</li></ul>
+<ul><li>Understand the hardware (SMs, warps, occupancy, bank conflicts, etc.) to optimize performance</li></ul>
+<ul><li>Benchmark to understand scaling</li></ul>
+<ul><li>Profile to see what's being executed for how long</li></ul>
+<ul><li>Triton: think in terms of thread blocks (read to shared memory, do stuff (fusion), write back HBM)</li></ul>
+<ul><li>Examples: GeLU (elementwise), softmax (row-wise), row sum (baby tiling), matmul (tiling)</li></ul>
+<p>Next time: more than one GPU!</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecture 02</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #18202a; }
+    main { max-width: 920px; margin: 0 auto; padding: 44px 28px 72px; background: white; min-height: 100vh; }
+    h1, h2, h3 { line-height: 1.18; margin: 1.45em 0 0.45em; }
+    h1 { font-size: 2.1rem; }
+    h2 { font-size: 1.55rem; border-top: 1px solid #e6e8ec; padding-top: 1.1em; }
+    h3 { font-size: 1.22rem; }
+    p, li, blockquote { font-size: 1.02rem; line-height: 1.58; }
+    p { margin: 0.55em 0; }
+    ul, ol { margin: 0.35em 0 0.35em 1.35em; padding: 0; }
+    blockquote { margin: 1em 0; padding: 0.7em 1em; border-left: 4px solid #c8d1dc; background: #f7f9fb; }
+    a { color: #2457d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .ref { margin-left: 0.2em; white-space: nowrap; }
+    figure { margin: 1.1em 0; text-align: center; }
+    img, video { max-width: 100%; height: auto; border: 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef1f5; padding: 0.08em 0.28em; border-radius: 4px; }
+    @media print {
+      body { background: white; }
+      main { padding: 0; max-width: none; }
+      a { color: #18202a; }
+      h2 { break-after: avoid; }
+      figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<p>Announcements:</p>
+<ul><li>Join the CS336 slack</li></ul>
+<ul><li>Sign up on Modal with your <strong>Stanford</strong> email</li></ul>
+<ul><li>Read the <a href="https://docs.google.com/document/d/1SZAlExB1qAc9izHt54gwunNpjKE6wXb8Y7yA_e-baK8/edit?tab=t.0">AI policy guide</a></li></ul>
+<ul><li>Read the <a href="https://docs.google.com/document/d/1cHE0iKVyXLJ3XpIs2XuXTmZ-HMmPk2hIPeCvy-AydMg/edit?tab=t.otis27tacaef">cluster guide</a></li></ul>
+<p>Marin 1e23 FLOPs run finished and <a href="https://x.com/WilliamBarrHeld/status/2039373983632814318">matched forecasts</a>!</p>
+<figure><img src="var/files/image-75df5937a21eff96383d1c7c2ff05132-https_pbs_twimg_com_media_HE1P1HmaUAAjLXF_format_jpg_name_medium" style="width: 800px"></figure>
+<p>Last lecture: overview, tokenization</p>
+<p>Today: resource accounting (systems)</p>
+<p>Recall: what's the best model one can train given fixed resources (compute, memory)?</p>
+<p>In other words: maximize (computational) <strong>efficiency</strong>.</p>
+<p>Prerequisite: understand the resources (compute, memory) for a given computation.</p>
+<p><strong>Question</strong>: How long would it take to train a 70B parameter model on 15T tokens on 1024 H100s?</p>
+<p><strong>Question</strong>: What's the largest model that can you can train on 8 H100s using AdamW?</p>
+<p>Caveat: activations are not accounted for (depends on batch size and sequence length), so this is an upper bound.</p>
+<p>This is a rough back-of-the-envelope calculation.</p>
+<p>But it gives you the flavor of napkin math one can quickly do to get a sense of resources.</p>
+<p>What knowledge to take away from this lecture:</p>
+<ul><li>Mechanics: straightforward (PyTorch semantics)</li></ul>
+<ul><li>Mindset: resource accounting (remember to do it)</li></ul>
+<ul><li>Intuitions: get a sense of how resources are spent, no ML magic today</li></ul>
+<p>Tensors are the basic building block for storing everything:</p>
+<ul><li>data</li></ul>
+<ul><li>parameters</li></ul>
+<ul><li>gradients</li></ul>
+<ul><li>optimizer state</li></ul>
+<ul><li>activations</li></ul>
+<p>Example: parameters of the DeepSeek v3.2 model</p>
+<a class="ref" href="https://arxiv.org/abs/2512.02556" title="DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models">[DeepSeek-AI+ 2025]</a>
+<a class="ref" href="https://huggingface.co/deepseek-ai/DeepSeek-V3.2?show_file_info=model.safetensors.index.json" title="DeepSeek v3.2 model on Hugging Face">[DeepSeek v3.2 model on Hugging Face]</a>
+<p>Each tensor has a rank, which is the number of dimensions.</p>
+<p>In Transformers, will see tensors of rank 4:</p>
+<p>Elements of tensors are generally floating point numbers.</p>
+<h2>fp32</h2>
+<a class="ref" href="https://en.wikipedia.org/wiki/Single-precision_floating-point_format" title="Wikipedia">[Wikipedia]</a>
+<figure><img src="images/fp32.png" style="width: 700px"></figure>
+<p>The fp32 data type (also known as float32 or single precision) is the default.</p>
+<p>Traditionally, in scientific computing, fp32 is the baseline; you could use double precision (fp64) in some cases.</p>
+<p>In deep learning, you can be a lot sloppier.</p>
+<p>Let's examine memory usage of these tensors.</p>
+<p>Memory is determined by the (i) number of values and (ii) data type of each value.</p>
+<p>One matrix in the feedforward layer of GPT-3:</p>
+<h2>fp16</h2>
+<a class="ref" href="https://en.wikipedia.org/wiki/Half-precision_floating-point_format" title="Wikipedia">[Wikipedia]</a>
+<figure><img src="images/fp16.png" style="width: 400px"></figure>
+<p>The fp16 data type (also known as float16 or half precision) cuts down the memory.</p>
+<p>However, the dynamic range (especially for small numbers) isn't great.</p>
+<p>If this happens when you train, you can get instability.</p>
+<h2>bf16</h2>
+<a class="ref" href="https://en.wikipedia.org/wiki/Bfloat16_floating-point_format" title="Wikipedia">[Wikipedia]</a>
+<figure><img src="images/bf16.png" style="width: 400px"></figure>
+<p>Google Brain developed brain floating point (bf16) in 2018 to address this issue.</p>
+<p>bf16 uses the same memory as fp16 but has the same dynamic range as fp32!</p>
+<p>The only catch is that the resolution is worse, but this matters less for deep learning.</p>
+<h2>Mixed precision</h2>
+<p>Implications on training:</p>
+<ul><li>Training with fp32 works, but requires lots of memory.</li></ul>
+<ul><li>Training with fp16 and even bf16 is risky, and you can get instability.</li></ul>
+<p>Solution: mixed precision training</p>
+<a class="ref" href="https://arxiv.org/pdf/1710.03740.pdf" title="Mixed Precision Training">[Micikevicius+ 2017]</a>
+<ul><li>Use bf16 for parameters, activations, and gradients</li></ul>
+<ul><li>Use fp32 for optimizer states</li></ul>
+<p>Pytorch has an automatic mixed precision (AMP) library.</p>
+<a class="ref" href="https://pytorch.org/docs/stable/amp.html" title="docs">[docs]</a>
+<p>Tries to cast things into bf16 when safe (matmuls, not exp).</p>
+<h2>fp8</h2>
+<p>In 2022, fp8 was standardized, motivated by machine learning workloads <a href="https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html">primer</a>.</p>
+<figure><img src="var/files/image-df6d7649a3bdb77cfdc38092d8387a99-https_docs_nvidia_com_deeplearning_transformer-engine_user-guide__images_fp8_formats_png" style="width: 600px"></figure>
+<p>H100s support two variants of FP8: E4M3 (range [-448, 448]) and E5M2 ([-57344, 57344]).</p>
+<p>Reference:</p>
+<a class="ref" href="https://arxiv.org/pdf/2209.05433.pdf" title="FP8 Formats for Deep Learning">[Micikevicius+ 2022]</a>
+<h2>fp4</h2>
+<p>In 2025, NVIDIA developed <a href="https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/">nvfp4</a></p>
+<p>Only 4 bits per value!</p>
+<p>Values: -6, -4, -3, -2, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2, 3, 4, 6</p>
+<p>Use a separate scale factor per block, so actually get more dynamic range (but just can't vary freely from neighbors).</p>
+<p>Nemotron 3 Super was trained in NVFP4</p>
+<a class="ref" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Super-Technical-Report.pdf" title="Nemotron 3 Super: Open, Efficient Mixture-of-Experts Hybrid Mamba-Transformer Model for Agentic Reasoning">[Nemotron 3 Super: Open, Efficient Mixture-of-Experts Hybrid Mamba-Transformer Model for Agentic Reasoning]</a>
+<p>Some of this is done in NVIDIA libraries outside of user control.</p>
+<p>By default, tensors are stored in CPU memory.</p>
+<p>However, what about GPUs?</p>
+<figure><img src="images/cpu-gpu.png" style="width: 600px"></figure>
+<p>In order to take advantage of the massive parallelism of GPUs, we need to move them to GPU memory.</p>
+<p>Or create the tensor directly on the GPU:</p>
+<p>Traditional PyTorch code:</p>
+<p>Easy to mess up the dimensions (what is -2, -1?)...</p>
+<p>Einops is a library for manipulating tensors where dimensions are named.</p>
+<p>It is inspired by Einstein summation notation (Einstein, 1916).</p>
+<a class="ref" href="https://einops.rocks/1-einops-basics/" title="Einops tutorial">[Einops tutorial]</a>
+<p>Einsum is generalized matrix multiplication with good bookkeeping.</p>
+<p>Let's try a more complex example...</p>
+<p>Dimensions that are not named in the output are summed over.</p>
+<p>You can reduce a single tensor via some operation (e.g., sum, mean, max, min).</p>
+<p>Sometimes, a dimension represents two dimensions</p>
+<p>...and you want to operate on one of them.</p>
+<p>...where <code>total_hidden</code> is a flattened representation of <code>heads * hidden1</code></p>
+<p>Having gone through all the operations, let us examine their computational cost.</p>
+<p>A floating-point operation (FLOP) is a basic operation like addition (x + y) or multiplication (x y).</p>
+<p>Two terribly confusing acronyms (pronounced the same!):</p>
+<ul><li>FLOPs: floating-point operations (measure of computation done)</li></ul>
+<ul><li>FLOP/s: floating-point operations per second (also written as FLOPS), which is used to measure the speed of hardware.</li></ul>
+<h2>Intuitions</h2>
+<p>Training GPT-3 (2020) took 3.14e23 FLOPs.</p>
+<a class="ref" href="https://lambdalabs.com/blog/demystifying-gpt-3" title="article">[article]</a>
+<p>Training GPT-4 (2023) is speculated to take 2e25 FLOPs.</p>
+<a class="ref" href="https://patmcguinness.substack.com/p/gpt-4-details-revealed" title="article">[article]</a>
+<p>H100 has a peak performance of 1979 teraFLOP/s with sparsity, 50% without</p>
+<a class="ref" href="https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-gpu-datasheet" title="spec">[spec]</a>
+<p>8 H100s for 2 weeks:</p>
+<h2>Linear model</h2>
+<p>How many FLOPs is this matmul?</p>
+<p>We have one multiplication (x[i][j] * w[j][k]) and one addition per (i, j, k) triple.</p>
+<p>We can also time this operation to see how long it takes.</p>
+<p>The actual FLOP/s of this operation:</p>
+<p>Each GPU has a specification sheet that provides the peak performance.</p>
+<ul><li>Example:</li></ul>
+<a class="ref" href="https://resources.nvidia.com/en-us-gpu-resources/h100-datasheet-24306" title="H100 spec">[H100 spec]</a>
+<p>Note that the FLOP/s depends heavily on the data type!</p>
+<h2>Model FLOPs utilization (MFU)</h2>
+<p>Definition: MFU = (actual FLOP/s) / (promised FLOP/s) [ignore communication/overhead]</p>
+<p>Usually, MFU of ≥ 0.5 is quite good!</p>
+<p>But why is MFU not closer to 1?</p>
+<p>To answer this question, we need to look more closely at how computations are done on GPUs...</p>
+<figure><img src="images/compute-memory.png" style="width: 300px"></figure>
+<p>How to compute a thing:</p>
+<ol start="1"><li>Send inputs from memory to accelerator</li></ol>
+<ol start="2"><li>Perform computation</li></ol>
+<ol start="3"><li>Send outputs from accelerator to memory</li></ol>
+<p>How long does this take?</p>
+<p>Depends on two things:</p>
+<ol start="1"><li>Accelerator speed (FLOP/s)</li></ol>
+<ol start="2"><li>Memory bandwidth (bytes/s)</li></ol>
+<p>Assume we can overlap communication and computation perfectly.</p>
+<p>What is the bottleneck?</p>
+<ul><li>Memory-bound: communication time &gt; computation time</li></ul>
+<ul><li>Compute-bound: computation time &gt; communication time</li></ul>
+<p>In this case, ReLU is memory-bound.</p>
+<p>Alternative way to see this:</p>
+<p>Accelerator intensity: how much work can the accelerator do per byte transferred?</p>
+<p>Arithmetic intensity: how much actual work per byte for this workload?</p>
+<p>What is the bottleneck?</p>
+<ul><li>Memory-bound: arithmetic intensity &lt; accelerator intensity</li></ul>
+<ul><li>Compute-bound: arithmetic intensity &gt; accelerator intensity</li></ul>
+<p>In general, we'll find ourselves memory bound.</p>
+<p>Can we increase arithmetic intensity?</p>
+<p>Note that GeLU does more work than ReLU per byte moved, so it has higher arithmetic intensity.</p>
+<p>But still memory-bound!</p>
+<p>In other words, ReLU is not faster than GeLU (when doing things in an isolated way).</p>
+<p>Memory-bound!</p>
+<p>Memory-bound!</p>
+<p>Finally, compute-bound!</p>
+<p>As long as we have large matrices, we're compute-bound (saturating the accelerator).</p>
+<p>Training Transformers involves big matrix multiplications.</p>
+<p>Matrix-vector product is what happens during inference, which is why inference is memory-bound.</p>
+<p>Note: arithmetic/accelerator intensity also depends on the precision (bf16 versus fp32).</p>
+<p>We can visualize the relationship between arithmetic intensity and performance using roofline plots.</p>
+<figure><img src="var/files/image-42d32b9c87939fe9a4b0a268d6d02ea7-https_jax-ml_github_io_scaling-book_assets_img_roofline-improved-1400_webp" style="width: 600px"></figure>
+<ul><li>Each slice on the x-axis is a particular computation (with some arithmetic intensity)</li></ul>
+<ul><li>Each piecewise linear function corresponds to a particular hardware</li></ul>
+<ul><li>Kink is the accelerator intensity (transition from memory-bound to compute-bound)</li></ul>
+<p>We can now relate this back to MFU:</p>
+<p>MFU = min(1, arithmetic-intensity / accelerator-intensity)</p>
+<a class="ref" href="https://jax-ml.github.io/scaling-book/roofline/" title="reference">[reference]</a>
+<figure><img src="images/deep-network.png" style="width: 800px"></figure>
+<p>Consider a deep network with L layers and D-dimensional inputs, activations, and outputs.</p>
+<p>So far, we've constructed tensors and passed them through operations (forward).</p>
+<p>Now, we're going to compute the gradient (backward).</p>
+<p>As a simple example, let's consider the simple linear model:</p>
+<p>y = 0.5 (x * w - 5)^2</p>
+<p>Forward pass: compute loss</p>
+<p>Backward pass: compute gradients</p>
+<p>Let us count the FLOPs for computing gradients.</p>
+<figure><img src="images/deep-network.png" style="width: 800px"></figure>
+<p>Define a simplified model (2-layer linear network):</p>
+<h2>Zoom in on one layer</h2>
+<p>Let's focus on the second layer (h2 = h1 @ w2)</p>
+<p><strong>Forward pass</strong>: Recall the number of forward FLOPs:</p>
+<p><strong>Backward pass</strong>: How many FLOPs is running the backward pass?</p>
+<p>We need to compute:</p>
+<ul><li>h1.grad = d loss / d h1</li></ul>
+<ul><li>w2.grad = d loss / d w2</li></ul>
+<p>Note that the backward pass is 2x more expensive than the forward pass.</p>
+<h2>Consider all layers</h2>
+<p>This was just for w2, need to apply it to all parameters in the network.</p>
+<p>Putting it together:</p>
+<ul><li>Forward pass: 2 (# data points) (# parameters) FLOPs</li></ul>
+<ul><li>Backward pass: 4 (# data points) (# parameters) FLOPs</li></ul>
+<ul><li>Total: 6 (# data points) (# parameters) FLOPs</li></ul>
+<p>This is for multilayer perceptrons (MLPs)</p>
+<p>...but it turns out to be a good approximation for Transformers for short context lengths as well.</p>
+<p>Recall our deep network.</p>
+<p>Let's define the AdaGrad optimizer</p>
+<ul><li>momentum = SGD + exponential averaging of grad</li></ul>
+<ul><li>AdaGrad = SGD + averaging by grad^2</li></ul>
+<ul><li>RMSProp = AdaGrad but with exponential averaging of grad^2</li></ul>
+<ul><li>Adam = RMSProp + momentum</li></ul>
+<p>AdaGrad</p>
+<a class="ref" href="https://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf" title="[Duchi+ 2011]">[Duchi+ 2011]</a>
+<h2>Memory</h2>
+<p>It is customary to use fp32 for stability (accumulating averages over powers over many steps).</p>
+<p>Optimizer state memory:</p>
+<ul><li>AdaGrad: 4 bytes/parameter for storing second moments</li></ul>
+<ul><li>Adam: 8 bytes/parameter for storing first and second moments</li></ul>
+<h2>Compute (for one training step)</h2>
+<h2>Transformers</h2>
+<p>The accounting for a Transformer is more complicated, but the same idea.</p>
+<p>Assignment 1 will ask you to do that.</p>
+<p>Blog post describing memory usage for Transformer training</p>
+<a class="ref" href="https://erees.dev/transformer-memory/" title="article">[article]</a>
+<p>Blog post describing FLOPs for a Transformer:</p>
+<a class="ref" href="https://www.adamcasson.com/posts/transformer-flops" title="article">[article]</a>
+<p>Large batch sizes: improve training stability</p>
+<p>However, activation memory scales with batch size, so might run out.</p>
+<p>Gradient accumulation:</p>
+<ul><li>Compute gradient on micro batches</li></ul>
+<ul><li>Accumulate the gradients (don't zero it out)</li></ul>
+<ul><li>Every batch_size / micro_batch_size steps, update the parameters and zero out the gradients</li></ul>
+<p>For training, we need to store the activations of all layers</p>
+<p>For inference, we don't compute gradients, so we only need to store the current layer's activations.</p>
+<figure><img src="images/deep-network.png" style="width: 800px"></figure>
+<p>The memory usage is</p>
+<p>Can we reduce this?</p>
+<p>Activation checkpointing = gradient checkpointing = rematerialization</p>
+<p>Key idea:</p>
+<ul><li>Forward pass: keep only activations at subset of layers</li></ul>
+<ul><li>Backward pass: recompute the missing activations from the last checkpoint</li></ul>
+<p>Philosophy: tradeoff memory for compute</p>
+<p>Can we reduce this even more, especially for deep networks (large L)?</p>
+<p>How frequently to checkpoint?</p>
+<ul><li>If store each layer's activations, then activation memory is O(L) and no recomputation.</li></ul>
+<ul><li>If store no activations, then activation memory is O(1) and compute is O(L^2) (recompute from the start for each layer).</li></ul>
+<ul><li>If store every sqrt(L) layers, then activation memory is O(sqrt(L)) and O(L) recomputation.</li></ul>
+<p>Summary:</p>
+<ul><li>Everything is operations on tensors (parameters, gradients, activations, optimizer states, data)</li></ul>
+<ul><li>einops: better way to think about tensor operations</li></ul>
+<ul><li>6 (# data points) (# parameters) FLOPs per training step</li></ul>
+<ul><li>Arithmetic intensity / roofline analysis: compute-bound or memory-bound?</li></ul>
+<ul><li>Matrix multiplications are compute-bound, elementwise operations are memory-bound</li></ul>
+<ul><li>Gradient accumulation, activation checkpointing: reduce memory to use bigger batch sizes</li></ul>
+</main>
+</body>
+</html>

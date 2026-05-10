@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecture 12</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #18202a; }
+    main { max-width: 920px; margin: 0 auto; padding: 44px 28px 72px; background: white; min-height: 100vh; }
+    h1, h2, h3 { line-height: 1.18; margin: 1.45em 0 0.45em; }
+    h1 { font-size: 2.1rem; }
+    h2 { font-size: 1.55rem; border-top: 1px solid #e6e8ec; padding-top: 1.1em; }
+    h3 { font-size: 1.22rem; }
+    p, li, blockquote { font-size: 1.02rem; line-height: 1.58; }
+    p { margin: 0.55em 0; }
+    ul, ol { margin: 0.35em 0 0.35em 1.35em; padding: 0; }
+    blockquote { margin: 1em 0; padding: 0.7em 1em; border-left: 4px solid #c8d1dc; background: #f7f9fb; }
+    a { color: #2457d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .ref { margin-left: 0.2em; white-space: nowrap; }
+    figure { margin: 1.1em 0; text-align: center; }
+    img, video { max-width: 100%; height: auto; border: 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef1f5; padding: 0.08em 0.28em; border-radius: 4px; }
+    @media print {
+      body { background: white; }
+      main { padding: 0; max-width: none; }
+      a { color: #18202a; }
+      h2 { break-after: avoid; }
+      figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<h2>Lecture 12: evaluation</h2>
+<ul><li>So far: we've covered everything for training an LM (architecture, training, systems, scaling).</li></ul>
+<ul><li>Missing piece: what <strong>data</strong> do you train on?</li></ul>
+<ul><li>Data shapes model behavior (code? multilingual? DNA?).</li></ul>
+<ul><li>Before talking about data, need to talk about what behavior we want from a model.</li></ul>
+<p><strong>Evaluation</strong>: given a model, how "<strong>good</strong>" is it?</p>
+<p>Evaluation might appear to be a mechanical process:</p>
+<ol start="1"><li>Define some prompts</li></ol>
+<ol start="2"><li>Send prompts to a model and get back responses</li></ol>
+<ol start="3"><li>Compute accuracy</li></ol>
+<p>But actually, evaluation is a deep and important topic...</p>
+<p>...which shapes the development of AI.</p>
+<p><strong>Core challenge</strong>: <font color="red">abstract construct</font> → <font color="blue">concrete metric</font></p>
+<p>Maybe a model is good if it does well on benchmarks...</p>
+<a class="ref" href="https://artificialanalysis.ai/" title="Artificial Analysis">[Artificial Analysis]</a>
+<figure><img src="images/artificial-analysis.png" style="width: 800px"></figure>
+<p>Maybe a model is good if it does well on benchmarks and is cheap to run...</p>
+<figure><img src="images/artificial-analysis-cost.png" style="width: 800px"></figure>
+<p>Maybe a model is good if people prefer its responses...</p>
+<a class="ref" href="https://arena.ai/leaderboard" title="Arena AI (formerly Chatbot Arena)">[Arena AI (formerly Chatbot Arena)]</a>
+<figure><img src="images/lmarena-leaderboard.png" style="width: 400px"></figure>
+<p>Maybe a model is good if people simply choose to use (and pay for) it...</p>
+<a class="ref" href="https://openrouter.ai/rankings" title="OpenRouter">[OpenRouter]</a>
+<figure><img src="images/openrouter.png" style="width: 600px"></figure>
+<ul><li>Recall: that a language model is a probability distribution <strong>p(x)</strong> over sequences of tokens.</li></ul>
+<ul><li>Perplexity (1/p(D))^(1/|D|) measures whether p assigns high probability to some dataset D.</li></ul>
+<ul><li>In pre-training, you minimize perplexity on the training set.</li></ul>
+<ul><li>The obvious thing is to measure perplexity on the test set.</li></ul>
+<ul><li>This is what people did traditionally in language modeling research.</li></ul>
+<p>Standard datasets:</p>
+<ul><li>Penn Treebank (WSJ)</li></ul>
+<ul><li>WikiText-103 (Wikipedia)</li></ul>
+<ul><li>One Billion Word Benchmark (from machine translation WMT11 - EuroParl, UN, news)</li></ul>
+<p>Classic paradigm: in-distribution evaluation: train on train split and evaluate on test split of some dataset.</p>
+<p>Pure CNNs+LSTMs on the One Billion Word Benchmark (perplexity 51.3 → 30.0)</p>
+<a class="ref" href="https://arxiv.org/abs/1602.02410" title="Exploring the Limits of Language Modeling">[Jozefowicz+ 2016]</a>
+<p>GPT-2:</p>
+<ul><li>Trained on WebText (40GB text, websites linked from Reddit)</li></ul>
+<ul><li>Zero-shot on standard datasets (<strong>out-of-distribution</strong> evaluation)</li></ul>
+<figure><img src="images/gpt2-perplexity.png" style="width: 800px"></figure>
+<ul><li>Works better on small datasets (PTB) where transfer is helpful, but not larger datasets (1BW)</li></ul>
+<p>Perplexity is all you need (more faith than science):</p>
+<ul><li>True distribution is t, model is p.</li></ul>
+<ul><li>Best possible perplexity is H(t) obtained iff p = t.</li></ul>
+<ul><li>If p = t, then solve all the tasks: p(solution | problem)</li></ul>
+<ul><li>So by pushing down on perplexity, we will eventually "reach AGI".</li></ul>
+<p>Perplexity is maybe more than you need:</p>
+<ul><li>Example: <em>Stanford was founded in 1885</em></li></ul>
+<ul><li>Perplexity penalizes prediction on all tokens, some (e.g., <em>founded</em>) of which might not be relevant</li></ul>
+<ul><li>Solution: measure conditional perplexity p(response | prompt)^(1/|response|)</li></ul>
+<p>Some benchmarks are perplexity in disguise:</p>
+<ul><li>Cloze tasks (fill in the blank): LAMBADA</li></ul>
+<a class="ref" href="https://arxiv.org/abs/1606.06031" title="The LAMBADA dataset: Word prediction requiring a broad discourse context">[Paperno+ 2016]</a>
+<figure><img src="images/lambada.png" style="width: 700px"></figure>
+<ul><li>Multiple choice sentence completion: HellaSwag</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/1905.07830" title="HellaSwag: Can a Machine Really Finish Your Sentence?">[Zellers+ 2019]</a>
+<figure><img src="images/hellaswag.png" style="width: 500px"></figure>
+<p><strong>Warning</strong> (if you're running a perplexity leaderboard):</p>
+<ul><li>People submit <code>LM</code> and you compute <code>log_prob = LM(test_data)</code></li></ul>
+<ul><li>You need to trust that the probabilities are valid (sum to 1)</li></ul>
+<ul><li>For downstream tasks, <code>response = LM(prompt)</code> and compute accuracy on <code>response</code></li></ul>
+<p>Summary:</p>
+<ul><li>Perplexity is still used heavily in language model development (smooth scaling laws)</li></ul>
+<ul><li>Still need benchmarks that capture real-world situations (for the non-believers)...</li></ul>
+<p>Exams are a useful way to test language models (as with humans):</p>
+<ul><li>Have control over the subject and difficulty</li></ul>
+<ul><li>Design to have unambiguous correct answer, easy to grade</li></ul>
+<p><strong>Massive Multitask Language Understanding (MMLU)</strong></p>
+<a class="ref" href="https://arxiv.org/pdf/2009.03300.pdf" title="Measuring Massive Multitask Language Understanding">[Hendrycks+ 2020]</a>
+<ul><li>57 subjects (e.g., math, US history, law, morality), multiple-choice</li></ul>
+<ul><li>"collected by graduate and undergraduate students from freely available sources online"</li></ul>
+<ul><li>Despite the name, MMLU is really about testing knowledge, not language understanding</li></ul>
+<ul><li>Evaluated on GPT-3 using few-shot prompting</li></ul>
+<figure><img src="images/mmlu.png" style="width: 700px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/mmlu" title="[https://llm-stats.com/benchmarks/mmlu]">[https://llm-stats.com/benchmarks/mmlu]</a>
+<a class="ref" href="https://crfm.stanford.edu/helm/mmlu/latest/" title="HELM MMLU for visualizing predictions">[HELM MMLU for visualizing predictions]</a>
+<p><strong>MMLU-Pro</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2406.01574" title="MMLU-Pro: A More Robust and Challenging Multi-Task Language Understanding Benchmark">[Wang+ 2024]</a>
+<ul><li>Removed noisy/trivial questions from MMLU</li></ul>
+<ul><li>Expanded 4 choices to 10 choices</li></ul>
+<ul><li>Evaluated using chain of thought (gives model more of a chance)</li></ul>
+<ul><li>Accuracy of models drop by 16% to 33% (not as saturated)</li></ul>
+<figure><img src="images/mmlu-pro.png" style="width: 700px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/mmlu-pro" title="[https://llm-stats.com/benchmarks/mmlu-pro]">[https://llm-stats.com/benchmarks/mmlu-pro]</a>
+<a class="ref" href="https://crfm.stanford.edu/helm/capabilities/latest/#/leaderboard/mmlu_pro" title="HELM MMLU-Pro for visualizing predictions">[HELM MMLU-Pro for visualizing predictions]</a>
+<p><strong>Graduate-Level Google-Proof Q&amp;A (GPQA)</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2311.12022" title="GPQA: A Graduate-Level Google-Proof Q&amp;A Benchmark">[Rein+ 2023]</a>
+<ul><li>Questions written by 61 PhD contractors from Upwork</li></ul>
+<figure><img src="images/gpqa.png" style="width: 700px"></figure>
+<ul><li>PhD experts achieve 65% accuracy</li></ul>
+<ul><li>Non-experts achieve 34% over 30 minutes with access to Google</li></ul>
+<ul><li>GPT-4 achieves 39%</li></ul>
+<a class="ref" href="https://llm-stats.com/benchmarks/gpqa" title="[https://llm-stats.com/benchmarks/gpqa]">[https://llm-stats.com/benchmarks/gpqa]</a>
+<a class="ref" href="https://crfm.stanford.edu/helm/capabilities/latest/#/leaderboard/gpqa" title="HELM GPQA for visualizing predictions">[HELM GPQA for visualizing predictions]</a>
+<p><strong>Humanity's Last Exam (HLE)</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2501.14249" title="Humanity&#x27;s Last Exam">[Phan+ 2025]</a>
+<ul><li>2500 questions: multimodal, many subjects, multiple-choice + short-answer</li></ul>
+<figure><img src="images/hle-examples.png" style="width: 700px"></figure>
+<ul><li>Awarded $500K prize pool + co-authorship to question creators</li></ul>
+<ul><li>Filtered by frontier LLMs, multiple stages of review</li></ul>
+<figure><img src="images/hle-pipeline.png" style="width: 700px"></figure>
+<figure><img src="images/hle-results.png" style="width: 600px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/hle" title="[https://llm-stats.com/benchmarks/hle]">[https://llm-stats.com/benchmarks/hle]</a>
+<p>Summary:</p>
+<ul><li>Trend towards harder questions as models improve and saturate existing benchmarks</li></ul>
+<ul><li>Multiple-choice format can be as difficult as one wants</li></ul>
+<ul><li>Does not capture real usage (open-ended, doesn't necessarily exist correct answer)</li></ul>
+<ul><li>So far, we've been evaluating on well-defined multiple-choice tasks.</li></ul>
+<ul><li>Most people don't ask multiple-choice exam questions to their AI assistant.</li></ul>
+<p>Example:</p>
+<p>Prompt: <em>I would like to make a beet salad with goat cheese. What kind of herbs would work well and what would not work well?</em></p>
+<p>Response: *Here’s a breakdown of herbs that work well (and some that don’t) in a beet + goat cheese salad, based on how their flavors interact with the sweet-earthiness of beets and the tangy creaminess of goat cheese...</p>
+<p><strong>Challenge</strong>: how to evaluate an open-ended response?</p>
+<p><strong>Chatbot Arena</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2403.04132" title="Chatbot Arena: An Open Platform for Evaluating LLMs by Human Preference">[Chiang+ 2024]</a>
+<p>Data collection:</p>
+<ul><li>Random person from the Internet types in prompt</li></ul>
+<ul><li>They get response from two random (anonymized) models</li></ul>
+<ul><li>They rate which one is better</li></ul>
+<figure><img src="images/arena-beets.png" style="width: 700px"></figure>
+<p>Compute ELO rankings based on pairwise comparisons:</p>
+<ul><li>Define model: p(A wins against B) = 1 / (1 + 10^((ELO_B - ELO_A)/400))</li></ul>
+<ul><li>Fit this model to maximize probability of pairwise comparisons</li></ul>
+<a class="ref" href="https://arena.ai/leaderboard" title="Arena AI (formerly Chatbot Arena)">[Arena AI (formerly Chatbot Arena)]</a>
+<figure><img src="images/lmarena-leaderboard.png" style="width: 400px"></figure>
+<p>Properties:</p>
+<ul><li>Real-world prompts (free for users, incentives to actually use it)</li></ul>
+<ul><li>But who are these people? biases? spammers?</li></ul>
+<ul><li>Binary preference but conflates style and correctness</li></ul>
+<ul><li>How does the human even assess correctness?  Prone to sycophancy?</li></ul>
+<ul><li>Feature: don't need to feed same prompts to all models (important because human is rating)</li></ul>
+<ul><li>Dynamic: incorporates new prompts and models over time</li></ul>
+<p><strong>AlpacaEval</strong> (2023)</p>
+<a class="ref" href="https://tatsu-lab.github.io/alpaca_eval/" title="leaderboard">[leaderboard]</a>
+<ul><li>805 instructions from various sources</li></ul>
+<ul><li>Metric: win rate against baseline model (GPT-4 preview) as judged by GPT-4 preview (potential bias?)</li></ul>
+<ul><li>Problem: LLM judges favor longer responses, resulted in leaderboard gaming</li></ul>
+<ul><li>Alpaca Eval 2.0 used regression to debias the metric</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2404.04475" title="Length-Controlled AlpacaEval: A Simple Way to Debias Automatic Evaluators">[Dubois+ 2024]</a>
+<ul><li>How do we evaluate the metric?</li></ul>
+<ul><li>Correlation with Chatbot Arena (humans) is high:</li></ul>
+<figure><img src="var/files/image-434a1510a7ed21d5355814149a9490c4-https_github_com_tatsu-lab_alpaca_eval_raw_main_figures_chat_correlations_no_ae_png" style="width: 500px"></figure>
+<figure><img src="images/alpacaeval-leaderboard.png" style="width: 400px"></figure>
+<p><strong>WildBench</strong></p>
+<a class="ref" href="https://arxiv.org/pdf/2406.04770" title="WildBench: Benchmarking LLMs with Challenging Tasks from Real Users in the Wild">[Lin+ 2024]</a>
+<ul><li>Sourced 1024 examples from 1M human-chatbot conversations</li></ul>
+<ul><li>Uses GPT-4 turbo as a judge with a checklist (like CoT for judging) + GPT-4 as a judge</li></ul>
+<ul><li>Well-correlated with Chatbot Arena (seems to be the de facto sanity check)</li></ul>
+<figure><img src="images/wildbench.png" style="width: 700px"></figure>
+<a class="ref" href="https://crfm.stanford.edu/helm/capabilities/latest/#/leaderboard/wildbench" title="HELM WildBench for visualizing predictions">[HELM WildBench for visualizing predictions]</a>
+<p>Summary:</p>
+<ul><li>Challenge: how to evaluate open-ended responses?</li></ul>
+<ul><li>Pairwise comparisons between similar responses provide higher signal</li></ul>
+<ul><li>Beware of biases (both from humans and LLM judges)</li></ul>
+<ul><li>Checklist/rubric improves reliability (regardless of human or LLM judge)</li></ul>
+<p>Previously: evaluate what LMs say (chat)</p>
+<p>Now: evaluate what LMs do (agents)</p>
+<p>Agent = language model + agent scaffold (logic for deciding how to use the LM)</p>
+<p>Consider tasks that require tool use (e.g., running code) and iterating over a period of time</p>
+<p><strong>SWEBench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2310.06770" title="SWE-bench: Can Language Models Resolve Real-World GitHub Issues?">[Jimenez+ 2023]</a>
+<ul><li>2294 tasks across 12 Python repositories</li></ul>
+<ul><li>Given codebase + issue description, submit a PR</li></ul>
+<ul><li>Evaluation metric: unit tests</li></ul>
+<figure><img src="images/swebench.png" style="width: 800px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/swe-bench-verified" title="[https://llm-stats.com/benchmarks/swe-bench-verified]">[https://llm-stats.com/benchmarks/swe-bench-verified]</a>
+<p><strong>TerminalBench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2601.11868" title="Terminal-Bench: Benchmarking Agents on Hard, Realistic Tasks in Command Line Interfaces">[Merrill+ 2026]</a>
+<a class="ref" href="https://www.tbench.ai/" title="website">[website]</a>
+<figure><img src="images/terminal-bench.png" style="width: 700px"></figure>
+<ul><li>Computer terminal environments: simple and universal</li></ul>
+<ul><li>229 tasks crowdsourced from 93 contributors, 89 tasks constitute Terminal-Bench 2.0</li></ul>
+<figure><img src="images/terminal-bench-human-time.png" style="width: 600px"></figure>
+<figure><img src="images/terminal-bench-results.png" style="width: 600px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/terminal-bench" title="[https://llm-stats.com/benchmarks/terminal-bench]">[https://llm-stats.com/benchmarks/terminal-bench]</a>
+<p><strong>CyBench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2408.08926" title="Cybench: A Framework for Evaluating Cybersecurity Capabilities and Risks of Language Models">[Zhang+ 2024]</a>
+<figure><img src="images/cybench.png" style="width: 700px"></figure>
+<ul><li>40 Capture the Flag (CTF) tasks</li></ul>
+<ul><li>Use first-solve time as a measure of difficulty</li></ul>
+<figure><img src="images/cybench-agent.png" style="width: 700px"></figure>
+<figure><img src="images/cybench-results.png" style="width: 600px"></figure>
+<a class="ref" href="https://llm-stats.com/benchmarks/cybench" title="[https://llm-stats.com/benchmarks/cybench]">[https://llm-stats.com/benchmarks/cybench]</a>
+<p><strong>MLEBench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2410.07095" title="MLE-bench: Evaluating Machine Learning Agents on Machine Learning Engineering">[Chan+ 2024]</a>
+<ul><li>75 Kaggle competitions (require training models, processing data, etc.)</li></ul>
+<figure><img src="images/mlebench.png" style="width: 800px"></figure>
+<figure><img src="images/mlebench-results.png" style="width: 700px"></figure>
+<p>Agent scaffolds</p>
+<a class="ref" href="https://www.philschmid.de/agents-2.0-deep-agents" title="post">[post]</a>
+<figure><img src="var/files/image-155d1eb10710df090449bf401822dd7e-https_www_philschmid_de_static_blog_agents-2_0-deep-agents_overview_png" style="width: 400px"></figure>
+<ul><li>Explicit planning: keep a todo list that gets checked off</li></ul>
+<ul><li>Hierarchical delegation: agents calling other sub-agents (clean context)</li></ul>
+<ul><li>Persistent memory: read/write files</li></ul>
+<ul><li>Extreme context engineering: explicit more instructions on process</li></ul>
+<p>Summary:</p>
+<ul><li>Agents dramatically enhance the capability surface of language models</li></ul>
+<ul><li>Agent scaffolds are very important</li></ul>
+<ul><li>Evaluating agents = evaluating agent scaffold + language model</li></ul>
+<ul><li>All of the tasks so far require linguistic and world knowledge.</li></ul>
+<ul><li>Can we isolate <strong>reasoning</strong> from knowledge?</li></ul>
+<ul><li>Arguably, reasoning captures a more pure form of intelligence (isn't just about memorizing facts).</li></ul>
+<p><strong>ARC-AGI</strong></p>
+<a class="ref" href="https://arcprize.org/arc-agi" title="website">[website]</a>
+<ul><li>100\% solvable by humans, but challenging for AI</li></ul>
+<ul><li>Each task is unique, so memorization doesn't help.</li></ul>
+<ul><li>ARC-AGI-1 (2019): first iteration</li></ul>
+<figure><img src="var/files/image-d1a33e9159cfdb77197551bbbecc6a76-https_arcprize_org_media_images_arc-task-grids_jpg" style="width: 800px"></figure>
+<ul><li>ARC-AGI-2 (March 2025): more multi-step reasoning</li></ul>
+<figure><img src="var/files/image-a0338c9fb72d1163cfc8ac66fea4e4ed-https_arcprize_org_media_images_blog_arc-agi-2-unsolved-1_png" style="width: 800px"></figure>
+<figure><img src="images/arc-agi-results.png" style="width: 700px"></figure>
+<ul><li>Pretrained language models didn't move the needle</li></ul>
+<ul><li>Reasoning models (o1, o3) started making things take off</li></ul>
+<ul><li>ARC-AGI-3 (March 2026): interactive environments</li></ul>
+<a class="ref" href="https://arcprize.org/media/ARC_AGI_3_Technical_Report.pdf" title="post">[post]</a>
+<figure><img src="images/arc-agi-3.png" style="width: 300px"></figure>
+<figure><img src="images/arc-agi-3-results.png" style="width: 500px"></figure>
+<p>Summary:</p>
+<ul><li>Goal is to disentangle reasoning from knowledge (difficult to do!)</li></ul>
+<ul><li>Constrained to human reasoning (not superhuman reasoning)</li></ul>
+<ul><li>Clearly exposes gaps in current models</li></ul>
+<figure><img src="var/files/image-a375cd28c372458baf4135c081a1ce8b-https_www_team-bhp_com_forum_attachments_road-safety_2173645d1625144681-will-crash-test-rating-change-if-higher-variant-chosen-images-30_jpeg" style="width: 400px"></figure>
+<p>What does safety mean for AI?</p>
+<p><strong>HarmBench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2402.04249" title="HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal">[Mazeika+ 2024]</a>
+<ul><li>Based on 510 harmful behaviors that violate laws or norms</li></ul>
+<a class="ref" href="https://crfm.stanford.edu/helm/safety/latest/#/leaderboard/harm_bench" title="HarmBench on HELM">[HarmBench on HELM]</a>
+<a class="ref" href="https://crfm.stanford.edu/helm/safety/latest/#/runs/harm_bench:model=anthropic_claude-3-7-sonnet-20250219?instancesPage=4" title="Example of safety failure">[Example of safety failure]</a>
+<p><strong>AIR-Bench</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2407.17436" title="AIR-Bench 2024: A Safety Benchmark Based on Risk Categories from Regulations and Policies">[Zeng+ 2024]</a>
+<ul><li>Based on regulatory frameworks and company policies</li></ul>
+<ul><li>Taxonomized into 314 risk categories, 5694 prompts</li></ul>
+<figure><img src="var/files/image-5993188f3fa9dc78b85f9866fcee27ac-https_crfm_stanford_edu_helm_assets_air-overview-DpBbyagA_png" style="width: 800px"></figure>
+<a class="ref" href="https://crfm.stanford.edu/helm/air-bench/latest/#/leaderboard" title="HELM AIR-Bench">[HELM AIR-Bench]</a>
+<p>Jailbreaking:</p>
+<ul><li>Language models are trained to refuse harmful instructions</li></ul>
+<ul><li>Greedy Coordinate Gradient (GCG) automatically optimizes prompts to bypass safety</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2307.15043" title="Universal and Transferable Adversarial Attacks on Aligned Language Models">[Zou+ 2023]</a>
+<ul><li>Transfers from open-weight models (Llama) to closed models (GPT-4)</li></ul>
+<figure><img src="images/gcg-examples.png" style="width: 800px"></figure>
+<p>What is safety?</p>
+<ul><li>Many aspects of safety are strongly contextual (politics, law, social norms - which vary across countries)</li></ul>
+<ul><li>Many risks are quite varied (hallucinations, sycophancy, abetting crimes, inequality, losing critical thinking)</li></ul>
+<p><strong>Dual-use</strong>: capable cybersecurity agents (Mythos) can be used to hack into a system or to do penetration testing</p>
+<p><strong>Ecological validity</strong>: how well does an evaluation capture real-world use?</p>
+<ul><li>Exam benchmarks (e.g., GPQA) are far away from real-world use.</li></ul>
+<ul><li>Chatbot Arena prompts are from real people, but distribution is uncontrolled.</li></ul>
+<p><strong>GDPVal</strong> (OpenAI)</p>
+<a class="ref" href="https://arxiv.org/pdf/2510.04374" title="GDPval: Evaluating AI Model Performance on Real-World Economically Valuable Tasks">[Patwardhan+ 2025]</a>
+<ul><li>44 occupations from top 9 sectors according to US GDP</li></ul>
+<ul><li>Tasks come from professionals with ~14 years of experience</li></ul>
+<figure><img src="images/gdpval.png" style="width: 700px"></figure>
+<p><strong>MedHELM</strong></p>
+<a class="ref" href="https://arxiv.org/abs/2505.23802" title="MedHELM: Holistic Evaluation of Large Language Models for Medical Tasks">[Bedi+ 2025]</a>
+<ul><li>Previous medical benchmarks were based on standardized exams</li></ul>
+<ul><li>121 clinical tasks sourced from 29 clinicians, mixture of private and public datasets</li></ul>
+<figure><img src="var/files/image-93ff2615b50418e8fd4dd6f6435bdff1-https_crfm_stanford_edu_helm_assets_medhelm-overview-CND0EIsy_png" style="width: 700px"></figure>
+<a class="ref" href="https://crfm.stanford.edu/helm/medhelm/latest/#/leaderboard" title="MedHELM">[MedHELM]</a>
+<p><strong>Clio</strong> (Anthropic)</p>
+<a class="ref" href="https://arxiv.org/abs/2412.13678" title="Clio: Privacy-Preserving Insights into Real-World AI Use">[Tamkin+ 2024]</a>
+<ul><li>Use language models to analyze real user data</li></ul>
+<ul><li>Share general patterns of what people are asking</li></ul>
+<figure><img src="images/clio-table4.png" style="width: 700px"></figure>
+<p>Unfortunately, realism and privacy are sometimes at odds with each other.</p>
+<p>How do we know our evaluations are valid?</p>
+<h3>Train-test overlap</h3>
+<ul><li>Machine learning 101: don't train on your test set</li></ul>
+<ul><li>Pre-foundation models (ImageNet, SQuAD): well-defined train-test splits</li></ul>
+<ul><li>Today: train on the Internet and don't tell people about your data</li></ul>
+<p>Route 1: try to infer train-test overlap from model</p>
+<ul><li>Exploit exchangeability of data points</li></ul>
+<a class="ref" href="https://arxiv.org/pdf/2310.17623" title="Proving Test Set Contamination in Black Box Language Models">[Oren+ 2023]</a>
+<figure><img src="images/contamination-exchangeability.png" style="width: 500px"></figure>
+<p>Route 2: encourage reporting norms (e.g., people report confidence intervals)</p>
+<ul><li>Model providers should report train-test overlap</li></ul>
+<a class="ref" href="https://arxiv.org/abs/2410.08385" title="Language model developers should report train-test overlap">[Zhang+ 2024]</a>
+<p>Route 3: use fresh evals</p>
+<ul><li>LiveCodeBench, UncheatableEval: scrape new webpages</li></ul>
+<ul><li>Timestamps aren't always safe due to copying either</li></ul>
+<p>Route 4: use private evals</p>
+<ul><li>Companies use internal code bases that aren't on the Internet</li></ul>
+<ul><li>Use your personal writings</li></ul>
+<ul><li>Easiest for perplexity</li></ul>
+<h3>Dataset quality</h3>
+<ul><li>Fixed up SWE-Bench to produce SWE-Bench Verified</li></ul>
+<a class="ref" href="https://openai.com/index/introducing-swe-bench-verified/" title="post">[post]</a>
+<ul><li>Create Platinum versions of benchmarks</li></ul>
+<a class="ref" href="https://arxiv.org/abs/2502.03461" title="Do Large Language Model Benchmarks Test Reliability?">[Vendrow+ 2025]</a>
+<figure><img src="var/files/image-a1149b095a48ea306dcdea342363230c-https_pbs_twimg_com_media_GjICXQlWkAAYnDS_format_jpg_name_4096x4096" style="width: 700px"></figure>
+<figure><img src="var/files/image-306ae3f862cee7c7842c0b29af3a2f5c-https_pbs_twimg_com_media_GjICcGQXYAAM4o1_format_jpg_name_4096x4096" style="width: 800px"></figure>
+<ul><li>Problems with agentic benchmarks: insufficient test cases, trivial agent can solve task</li></ul>
+<a class="ref" href="https://arxiv.org/abs/2507.02825" title="Establishing Best Practices for Building Rigorous Agentic Benchmarks">[Zhu+ 2025]</a>
+<ul><li>Docent: use LLM to inspect agent traces to detect problems</li></ul>
+<a class="ref" href="https://transluce.org/introducing-docent" title="post">[post]</a>
+<h3>What's the point of evaluation?</h3>
+<p>There is no one true evaluation; it depends on what question you're trying to answer.</p>
+<ol start="1"><li>User or company wants to make a purchase decision (model A or model B) for their use case (e.g., customer service chatbots).</li></ol>
+<ol start="2"><li>Researchers want to measure the raw capabilities of a model (e.g., intelligence).</li></ol>
+<ol start="3"><li>We want to understand the benefits + harms of a model (for business and policy reasons).</li></ol>
+<ol start="4"><li>Model developers want to get feedback to improve the model.</li></ol>
+<h3>What are we evaluating?</h3>
+<ul><li>Pre-foundation models, we evaluated <strong>methods</strong> (standardized train-test splits).</li></ul>
+<ul><li>Today, we're (mostly) evaluating <strong>models/systems</strong> (anything goes).</li></ul>
+<p>There are some exceptions...</p>
+<ul><li>nanogpt speedrun: fixed data, compute time to get to a particular validation loss</li></ul>
+<figure><img src="images/karpathy-nanogpt-speedrun.png" style="width: 600px"></figure>
+<a class="ref" href="https://x.com/karpathy/status/1846790537262571739" title="post">[post]</a>
+<p>Evaluating methods encourage algorithmic innovation from researchers.</p>
+<p>Evaluating models/systems is useful for downstream users.</p>
+<p>Either way, we need to define the rules of the game!</p>
+<p>Takeaways:</p>
+<ul><li>There is no one true evaluation; choose the evaluation depending on what you're trying to measure.</li></ul>
+<ul><li>Clearly state the rules of the game (methods versus models versus agents).</li></ul>
+<ul><li>Considerations: difficulty, realism, validity.</li></ul>
+</main>
+</body>
+</html>
